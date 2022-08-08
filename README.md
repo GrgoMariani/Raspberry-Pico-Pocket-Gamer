@@ -2,6 +2,11 @@
 
 A Raspberry Pico __RP2040__ and __ILI9341__ based pocket console.
 
+> Watch the video by clicking on the image
+
+[![Raspberry Pico Pocket Gamer Video](https://img.youtube.com/vi/271OoiJQUyk/0.jpg)](https://www.youtube.com/watch?v=271OoiJQUyk "Raspberry Pico Pocket Gamer Video")
+
+
 ## Description
 Since the Pico came out I wanted to create a project for it that I can show my son to, so I decided to make him a Pocket Console. The game repertoire is quite basic and consists of 12 different games.
 
