@@ -265,7 +265,6 @@ static void G_Draw(void)
     {
        
     }
-    GPU_Render();
 }
 
 static void G_Deinit(void)

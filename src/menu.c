@@ -135,8 +135,6 @@ static void MM_Draw(void)
     uint32_t tick = CalculateTick();
     double s = sin(tick*0.02);
     GPU_DrawRotatedTexture(GPU_X/2+GPU_X/4, GPU_Y/2, 0.7+s*s, tick*0.02);
-
-    GPU_Render();
 }
 
 static void MM_Deinit(void)

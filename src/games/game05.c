@@ -415,7 +415,6 @@ static void G_Draw(void)
 			GPU_DrawText(C_BLACK, f_big, RESET_BUTTON_X, RESET_BUTTON_Y, textToDisplay, len);
 		}
     }
-    GPU_Render();
 }
 
 static void G_Deinit(void)

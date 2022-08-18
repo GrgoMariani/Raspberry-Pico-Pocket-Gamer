@@ -154,12 +154,6 @@ static void G_Update(void)
 
 static void G_Draw(void)
 {
-	uint32_t time_now = IF_GetCurrentTime();
-	if (time_now - mainMemory._lastRenderedTime > TIME_PERIOD)
-	{
-		GPU_Render();
-		mainMemory._lastRenderedTime = IF_GetCurrentTime();
-	}
 	const FontDescription * f_big = &fontDescription[3];
     GPU_ClearFramebuffers();
     const char nums[16] = "123+456-789*C0/=";
@@ -180,7 +174,6 @@ static void G_Draw(void)
 
     len = sprintf(buffer, "%d", memory->current_input);
 	GPU_DrawText(C_WHITE, f_big, S2_CENTER_X - len*f_big->width/2, S2_CENTER_Y + 2*f_big->height/2, buffer, len);
-    GPU_Render();
 }
 
 static void G_Deinit(void)

@@ -41,6 +41,7 @@ void DoMainLoop()
             {
                 _lastDrawTime = new_draw_time;
                 (*_callbacks.drawCallback)();
+                GPU_Render();
             }
         };
         if (breakGame)

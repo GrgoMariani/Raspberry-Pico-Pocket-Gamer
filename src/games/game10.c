@@ -72,7 +72,6 @@ static void G_Draw(void)
 	uint32_t time_now = IF_GetCurrentTime();
 	if (time_now - mainMemory._lastRenderedTime > TIME_PERIOD)
 	{
-		GPU_Render();
 		mainMemory._lastRenderedTime = IF_GetCurrentTime();
 	}
 }

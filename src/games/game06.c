@@ -507,7 +507,6 @@ static void G_Draw(void)
     {
         DrawWall(i);
     }
-    GPU_Render();
 }
 
 static void G_Deinit(void)

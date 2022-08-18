@@ -270,7 +270,6 @@ static void G_Draw(void)
 		GPU_DrawFilledSquare(C_YELLOW, RESET_BUTTON_X, RESET_BUTTON_Y, RESET_BUTTON_W, RESET_BUTTON_H);
 		GPU_DrawText(C_BLACK, &fontDescription[3], RESET_BUTTON_X, RESET_BUTTON_Y, textToDisplay, len);
     }
-    GPU_Render();
 }
 
 static void G_Deinit(void)

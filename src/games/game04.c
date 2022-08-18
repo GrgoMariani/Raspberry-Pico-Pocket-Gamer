@@ -177,12 +177,6 @@ static void G_Update(void)
 
 static void G_Draw(void)
 {
-	uint32_t time_now = IF_GetCurrentTime();
-	if (time_now - mainMemory._lastRenderedTime > TIME_PERIOD)
-	{
-		GPU_Render();
-		mainMemory._lastRenderedTime = IF_GetCurrentTime();
-	}
     const FontDescription * f = &fontDescription[0];
     const FontDescription * f_medium = &fontDescription[1];
     const FontDescription * f_big = &fontDescription[2];
@@ -270,7 +264,6 @@ static void G_Draw(void)
 				GPU_DrawLetter(C_BLACK, f_huge, GPU_X/2+i*BOX_W + BOX_W/2, j*BOX_H+BOX_H/2-f_huge->height/2, nums[value]);
 			}
 		}
-    GPU_Render();
 }
 
 static void G_Deinit(void)
