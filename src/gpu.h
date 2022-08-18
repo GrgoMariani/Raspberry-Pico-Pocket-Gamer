@@ -29,7 +29,7 @@ typedef struct {
 extern const FontDescription fontDescription[4];
 
 
-#define RGB(r, g, b) ( ((r)&0xf8 ) | (((b)&0xf8)<<5) | (((g)&0xe0)>>5) | (((g)&0x1c)<<6) )
+#define RGB(r, g, b) ( (uint16_t)((r)&0xf8 ) | (((uint16_t)((b)&0x00f8))<<5) | (((g)&0x00e0)>>5) | (((uint16_t)((g)&0x001c))<<6) )
 #define C_WHITE RGB(255,255,255)
 #define C_BLACK RGB(0,0,0)
 #define C_BLUE RGB(0,0,255)

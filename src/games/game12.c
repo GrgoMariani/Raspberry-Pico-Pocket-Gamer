@@ -20,12 +20,11 @@ typedef struct {
     uint8_t current_input_num;
     long long previous_result;
     Operation operation;
+	uint8_t is_touch_held;
 } Game12Memory;
 
 static Game12Memory * const memory = (Game12Memory*)(&mainMemory.sharedMemory.memblocks[0]);
 
-#define MAX_FRAMERATE 3
-#define TIME_PERIOD (ONE_SECOND/MAX_FRAMERATE)
 
 #define MAX_NUMS 8
 
@@ -36,6 +35,7 @@ static void G_Init(void)
     memory->current_input = 0;
     memory->current_input_num = 0;
     memory->previous_result = 0;
+	memory->is_touch_held = 0;
 }
 
 static void NumPressed(uint8_t num)
@@ -93,63 +93,71 @@ static void G_Update(void)
 		return;
 	}
     // get input
-	if (mainMemory.touchPressed && mainMemory.touch_X >= 0 && mainMemory.touch_X <= GPU_X/2 && mainMemory.touch_Y >= 0 && mainMemory.touch_Y <= GPU_Y)
-	{
-		uint8_t x = mainMemory.touch_X/BOX_W;
-		uint8_t y = mainMemory.touch_Y/BOX_H;
-		uint8_t pressed = 4*y+x;
-		switch (pressed)
+	if (mainMemory.touchPressed && !memory->is_touch_held)
+    {
+        memory->is_touch_held=1;
+        if (mainMemory.touch_X >= 0 && mainMemory.touch_X <= GPU_X/2 && mainMemory.touch_Y >= 0 && mainMemory.touch_Y <= GPU_Y)
 		{
-		case 0: // 1
-			NumPressed(1);
-			break;
-		case 1: // 2
-			NumPressed(2);
-			break;
-		case 2: // 3
-			NumPressed(3);
-			break;
-		case 3: // +
-			OperationPressed(OP_ADD);
-			break;
-		case 4: // 4
-			NumPressed(4);
-			break;
-		case 5: // 5
-			NumPressed(5);
-			break;
-		case 6: // 6
-			NumPressed(6);
-			break;
-		case 7: // -
-			OperationPressed(OP_SUBSTRACT);
-			break;
-		case 8: // 7
-			NumPressed(7);
-			break;
-		case 9: // 8
-			NumPressed(8);
-			break;
-		case 10: // 9
-			NumPressed(9);
-			break;
-		case 11: // *
-			OperationPressed(OP_MULTIPLY);
-			break;
-		case 12: // C
-			G_Init();
-			break;
-		case 13: // 0
-			NumPressed(0);
-			break;
-		case 14: // /
-			OperationPressed(OP_DIVIDE);
-			break;
-		case 15: // =
-			OperationPressed(OP_EQUAL);
-			break;
+			uint8_t x = mainMemory.touch_X/BOX_W;
+			uint8_t y = mainMemory.touch_Y/BOX_H;
+			uint8_t pressed = 4*y+x;
+			switch (pressed)
+			{
+			case 0: // 1
+				NumPressed(1);
+				break;
+			case 1: // 2
+				NumPressed(2);
+				break;
+			case 2: // 3
+				NumPressed(3);
+				break;
+			case 3: // +
+				OperationPressed(OP_ADD);
+				break;
+			case 4: // 4
+				NumPressed(4);
+				break;
+			case 5: // 5
+				NumPressed(5);
+				break;
+			case 6: // 6
+				NumPressed(6);
+				break;
+			case 7: // -
+				OperationPressed(OP_SUBSTRACT);
+				break;
+			case 8: // 7
+				NumPressed(7);
+				break;
+			case 9: // 8
+				NumPressed(8);
+				break;
+			case 10: // 9
+				NumPressed(9);
+				break;
+			case 11: // *
+				OperationPressed(OP_MULTIPLY);
+				break;
+			case 12: // C
+				G_Init();
+				break;
+			case 13: // 0
+				NumPressed(0);
+				break;
+			case 14: // /
+				OperationPressed(OP_DIVIDE);
+				break;
+			case 15: // =
+				OperationPressed(OP_EQUAL);
+				break;
+			}
 		}
-	}
+    }
+    if (!mainMemory.touchPressed)
+    {
+        memory->is_touch_held = 0;
+    }
 }
 
 static void G_Draw(void)

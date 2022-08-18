@@ -28,6 +28,7 @@ typedef struct {
     uint8_t _y;
     uint32_t _guessesCorrect;
     uint32_t _guessesTotal;
+    uint8_t is_touch_held;
 } Game4Memory;
 
 static Game4Memory * const memory = (Game4Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -116,20 +117,13 @@ static void GenerateNewAnswer()
     }
 }
 
-#define NUM_TICKS 3
-
-static inline uint32_t CalculateTick(long long timeNow)
-{
-	return timeNow/(ONE_SECOND/NUM_TICKS);
-}
-
 static void G_Init(void)
 {
     memory->_lastGuess = GR_NO_GUESS;
     memory->_guessesCorrect = 0;
     memory->_guessesTotal = 0;
+    memory->is_touch_held = 0;
     GenerateNewAnswer();
-	mainMemory._lastRenderedTick = CalculateTick(IF_GetCurrentTime());
 }
 
 
@@ -139,7 +133,6 @@ static void G_Init(void)
 
 static void G_Update(void)
 {
-	uint32_t tickNow = CalculateTick(IF_GetCurrentTime());
 	KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
 	if (keyboard & KEY_MENU)
 	{
@@ -147,9 +140,10 @@ static void G_Update(void)
 		return;
 	}
 
-    while (mainMemory._lastRenderedTick < tickNow)
+    if (mainMemory.touchPressed && !memory->is_touch_held)
     {
-        if (mainMemory.touchPressed && mainMemory.touch_X >= GPU_X/2 && mainMemory.touch_X <= GPU_X && mainMemory.touch_Y >= 0 && mainMemory.touch_Y <= GPU_Y)
+        memory->is_touch_held=1;
+        if (mainMemory.touch_X >= GPU_X/2 && mainMemory.touch_X <= GPU_X && mainMemory.touch_Y >= 0 && mainMemory.touch_Y <= GPU_Y)
         {
             uint8_t x = (mainMemory.touch_X - GPU_X/2)/BOX_W;
             uint8_t y = mainMemory.touch_Y/BOX_H;
@@ -167,13 +161,13 @@ static void G_Update(void)
             }
             GenerateNewAnswer();
         }
-        mainMemory._lastRenderedTick++;
+    }
+    if (!mainMemory.touchPressed)
+    {
+        memory->is_touch_held = 0;
     }
 }
 
-
-#define MAX_FRAMERATE 2
-#define TIME_PERIOD (ONE_SECOND/MAX_FRAMERATE)
 
 static void G_Draw(void)
 {
