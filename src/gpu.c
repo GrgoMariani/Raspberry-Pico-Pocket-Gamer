@@ -42,7 +42,7 @@ void GPU_Render()
 	uint16_t len = 0;
 	uint32_t nowTime = IF_GetCurrentTime();
 
-#define COLOR_INFO 0xf23f
+#define COLOR_INFO RGB(217,207,38)
 	if (oldTime != nowTime)
 	{
 		uint16_t fps = ONE_SECOND / (nowTime-oldTime);

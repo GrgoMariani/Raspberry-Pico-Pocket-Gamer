@@ -24,32 +24,24 @@ typedef struct {
     const uint8_t height;
 } FontDescription;
 
-/*
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-    uint8_t o;
-} GPU_Color;*/
-
 #define GPU_Color uint16_t
 
 extern const FontDescription fontDescription[4];
 
 
-
-#define C_WHITE 0xffff
-#define C_BLACK 0x0000
-#define C_BLUE 0x1f00
-#define C_YELLOW 0xe0ff
-#define C_RED 0x00f8
-#define C_GREEN 0xe007
-#define C_GRAY_LIGHT 0x4444
-#define C_GRAY_MEDIUM 0x8888
-#define C_GRAY_DARK 0xcccc
-#define C_C1 0x4444
-#define C_C2 0x8888
-#define C_C3 0xcccc
+#define RGB(r, g, b) ( ((r)&0xf8 ) | (((b)&0xf8)<<5) | (((g)&0xe0)>>5) | (((g)&0x1c)<<6) )
+#define C_WHITE RGB(255,255,255)
+#define C_BLACK RGB(0,0,0)
+#define C_BLUE RGB(0,0,255)
+#define C_YELLOW RGB(255,255,0)
+#define C_RED RGB(255,0,0)
+#define C_GREEN RGB(0,255,0)
+#define C_GRAY_LIGHT RGB(64,64,64)
+#define C_GRAY_MEDIUM RGB(128,128,128)
+#define C_GRAY_DARK RGB(192,192,192)
+#define C_C1 RGB(39,153,216)
+#define C_C2 RGB(216,39,153)
+#define C_C3 RGB(153,216,39)
 
 void GPU_Init();
 void GPU_ClearTexture();
