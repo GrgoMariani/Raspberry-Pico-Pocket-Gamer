@@ -42,6 +42,7 @@ add_executable(PocketGamer
         src/games/game10.c
         src/games/game11.c
         src/games/game12.c
+        src/games/game13.c
         )
 
 pico_set_program_name(PocketGamer "PocketGamer")
@@ -56,7 +57,6 @@ target_link_libraries(PocketGamer pico_stdlib)
 # Add any user requested libraries
 target_link_libraries(PocketGamer
         hardware_spi
-        hardware_dma
         )
 
 pico_add_extra_outputs(PocketGamer)

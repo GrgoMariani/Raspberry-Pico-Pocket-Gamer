@@ -17,6 +17,7 @@ typedef enum {
 typedef struct {
     LO_Light _lights[5][5];
     unsigned int _stepsCount;
+	uint8_t is_touch_pressed;
 } Game3Memory;
 
 
@@ -55,13 +56,6 @@ static uint8_t IsGameFinished()
 	return 1;
 }
 
-#define NUM_TICKS 3
-
-static inline uint32_t CalculateTick(long long timeNow)
-{
-	return timeNow/(ONE_SECOND/NUM_TICKS);
-}
-
 static void G_Init(void)
 {
 	mainMemory._gameState = GS_RUNNING;
@@ -83,7 +77,7 @@ static void G_Init(void)
 			}
 		}
 	memory->_stepsCount = 0;
-	mainMemory._lastRenderedTick = CalculateTick(IF_GetCurrentTime());
+	memory->is_touch_pressed = 0;
 }
 
 /*
@@ -111,7 +105,6 @@ static void G_Init(void)
 
 static void G_Update(void)
 {
-	uint32_t tickNow = CalculateTick(IF_GetCurrentTime());
 	KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
 	if (keyboard & KEY_MENU)
 	{
@@ -125,10 +118,11 @@ static void G_Update(void)
 	}
 	else
 	{
-		while (mainMemory._lastRenderedTick < tickNow && mainMemory._gameState == GS_RUNNING)
+		if (mainMemory._gameState == GS_RUNNING)
 		{
-			if (mainMemory.touchPressed)
+			if (mainMemory.touchPressed && !memory->is_touch_pressed)
 			{
+				memory->is_touch_pressed = 1;
 				uint8_t x=5,y=5;
 				if (mainMemory.touch_X < START_X || mainMemory.touch_X > END_X || mainMemory.touch_Y < START_Y || mainMemory.touch_Y > END_Y)
 					return;
@@ -139,7 +133,10 @@ static void G_Update(void)
 				if (x < 5 && y < 5)
 					TogglePosition(x, y);
 			}
-			mainMemory._lastRenderedTick++;
+			if (!mainMemory.touchPressed)
+			{
+				memory->is_touch_pressed = 0;
+			}
 		}
 	}
 	if (mainMemory._gameState != GS_RUNNING)

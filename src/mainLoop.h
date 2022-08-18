@@ -25,6 +25,7 @@ extern const Callbacks G9_Callbacks;
 extern const Callbacks G10_Callbacks;
 extern const Callbacks G11_Callbacks;
 extern const Callbacks G12_Callbacks;
+extern const Callbacks G13_Callbacks;
 
 extern int breakGame;
 
