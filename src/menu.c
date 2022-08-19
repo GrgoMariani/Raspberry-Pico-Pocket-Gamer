@@ -31,7 +31,7 @@ static uint32_t CalculateTick()
     return IF_GetCurrentTime()/(ONE_SECOND/NUM_TICKS);
 }
 
-#define NO_OF_GAMES 12
+#define NO_OF_GAMES 13
 static const GameItem listOfGames[NO_OF_GAMES] = {
     {"TicTacToe1P\0", &G1_Callbacks},
     {"TicTacToe2P\0", &G2_Callbacks},
