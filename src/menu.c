@@ -46,6 +46,7 @@ static const GameItem listOfGames[NO_OF_GAMES] = {
     {"Snake      \0", &G11_Callbacks},
 	{"Calculator \0", &G12_Callbacks},
     {"Pong       \0", &G13_Callbacks},
+    {"Breakout   \0", &G14_Callbacks},
 };
 
 static void MM_Init(void)

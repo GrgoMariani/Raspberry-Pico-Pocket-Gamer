@@ -28,7 +28,7 @@ typedef struct {
 
 static Game13Memory * const memory = (Game13Memory*)(&mainMemory.sharedMemory.memblocks[0]);
 
-#define NUM_TICKS 15
+#define NUM_TICKS 35
 
 static uint32_t CalculateTick()
 {

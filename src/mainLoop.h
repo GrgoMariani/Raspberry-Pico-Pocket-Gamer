@@ -26,6 +26,7 @@ extern const Callbacks G10_Callbacks;   // Paint.NOT
 extern const Callbacks G11_Callbacks;   // Snake
 extern const Callbacks G12_Callbacks;   // Calculator
 extern const Callbacks G13_Callbacks;   // Pong
+extern const Callbacks G14_Callbacks;   // Breakout
 
 extern int breakGame;
 

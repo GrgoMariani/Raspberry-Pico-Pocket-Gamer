@@ -43,6 +43,7 @@ add_executable(PocketGamer
         src/games/game11.c
         src/games/game12.c
         src/games/game13.c
+        src/games/game14.c
         )
 
 pico_set_program_name(PocketGamer "PocketGamer")
