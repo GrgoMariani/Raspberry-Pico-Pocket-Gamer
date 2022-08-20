@@ -2,6 +2,7 @@
 
 #include "gpu.h"
 #include "interface.h"
+#include "gameshared.h"
 
 Callbacks _callbacks = { 0, 0, 0, 0 };
 
@@ -25,12 +26,18 @@ static uint32_t _lastDrawTime;
 
 void DoMainLoop()
 {
+    KeyPressedEnum keys_held;
     _lastDrawTime = IF_GetCurrentTime();
     while (1)
     {
         // Register keyboard and touch events
         IF_Keyboard();
         IF_Touchscreen();
+        // Reset to main menu
+        if (Keyboard_GetHeldKeys() & KEY_MENU)
+        {
+            SetupCallbacks(&MM_Callbacks);
+        }
         // Do main loop logic
         if (_callbacks.updateCallback) (*_callbacks.updateCallback)();
         // Render screen at desired FPS

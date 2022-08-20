@@ -147,11 +147,6 @@ static void MoveAI()
 static void G_Update(void)
 {
 	KeyPressedEnum keyboard_held = Keyboard_GetHeldKeys();
-	if (keyboard_held & KEY_MENU)
-	{
-		SetupCallbacks(&MM_Callbacks);
-		return;
-	}
 	uint32_t current_tick = CalculateTick();
 	while (mainMemory._lastRenderedTick < current_tick)
 	{

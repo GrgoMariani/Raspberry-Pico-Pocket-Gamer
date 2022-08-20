@@ -86,12 +86,6 @@ static void OperationPressed(Operation op)
 
 static void G_Update(void)
 {
-	KeyPressedEnum keyboard_held = Keyboard_GetHeldKeys();
-	if (keyboard_held & KEY_MENU)
-	{
-		SetupCallbacks(&MM_Callbacks);
-		return;
-	}
     // get input
 	if (mainMemory.touchPressed && !memory->is_touch_held)
     {

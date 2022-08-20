@@ -193,13 +193,8 @@ static void G_Init(void)
 static void G_Update(void)
 {
 	KeyPressedEnum keyboard_held = Keyboard_GetHeldKeys();
-	if (keyboard_held & KEY_MENU)
-	{
-		SetupCallbacks(&MM_Callbacks);
-		return;
-	}
-
     uint32_t nowTick = CalculateTick();
+    
     while (mainMemory._lastRenderedTick < nowTick)
     {
 	    KeyPressedEnum keyboard = Keyboard_GetPressedKeys();

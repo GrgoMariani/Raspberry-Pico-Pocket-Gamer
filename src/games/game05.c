@@ -289,11 +289,6 @@ static void G_Init(void)
 static void G_Update(void)
 {
 	KeyPressedEnum keyboard_held = Keyboard_GetHeldKeys();
-	if (keyboard_held & KEY_MENU)
-	{
-		SetupCallbacks(&MM_Callbacks);
-		return;
-	}
 
     if (mainMemory._gameState == GS_RUNNING)
     {

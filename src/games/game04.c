@@ -133,13 +133,6 @@ static void G_Init(void)
 
 static void G_Update(void)
 {
-	KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
-	if (keyboard & KEY_MENU)
-	{
-		SetupCallbacks(&MM_Callbacks);
-		return;
-	}
-
     if (mainMemory.touchPressed && !memory->is_touch_held)
     {
         memory->is_touch_held=1;

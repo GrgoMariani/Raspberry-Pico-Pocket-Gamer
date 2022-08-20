@@ -153,13 +153,6 @@ static void G_Init(void)
 static void G_Update(void)
 {
 	uint32_t tickNow = CalculateTick(IF_GetCurrentTime());
-	KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
-	if (keyboard & KEY_MENU)
-	{
-		SetupCallbacks(&MM_Callbacks);
-		return;
-	}
-
 	
 	while (mainMemory._lastRenderedTick < tickNow && mainMemory._gameState == GS_RUNNING)
 	{

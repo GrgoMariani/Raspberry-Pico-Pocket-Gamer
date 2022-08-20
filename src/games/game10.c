@@ -44,14 +44,6 @@ static void G_Init(void)
 
 static void G_Update(void)
 {
-	KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
-	if (keyboard & KEY_MENU)
-	{
-		SetupCallbacks(&MM_Callbacks);
-		return;
-	}
-
-
     if (mainMemory.touchPressed)
     {
     	if (mainMemory.touch_X >= 0 && mainMemory.touch_X < 24 && mainMemory.touch_Y >= 0 && mainMemory.touch_Y < 240)
