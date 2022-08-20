@@ -66,7 +66,7 @@ static void G_Init(void)
 #define BOX_W (GPU_X - EDGE_X*2)
 #define BOX_H (GPU_Y - EDGE_Y*2)
 
-#define BALL_SIZE (6)
+#define BALL_SIZE (3)
 #define BALL_SPEED (120.0f/NUM_TICKS)
 #define PLAYER_W (6)
 #define PLAYER_H (36)
@@ -78,7 +78,7 @@ static void CheckPlayerCollision()
 {
 	if (memory->ball_y-memory->player_y <= PLAYER_H/2 && memory->ball_y-memory->player_y >= -PLAYER_H/2)
 	{
-		float diff = (memory->ball_y-memory->player_y)/((PLAYER_H+1)/2);
+		float diff = (memory->ball_y-memory->player_y)/((PLAYER_H+0.1)/2);
 		memory->ball_sin = diff;
 		memory->ball_cos = sqrt(1-diff*diff);
 	}
@@ -93,7 +93,7 @@ static void CheckAICollision()
 {
 	if (memory->ball_y-memory->computer_y <= PLAYER_H/2 && memory->ball_y-memory->computer_y >= -PLAYER_H/2)
 	{
-		float diff = (memory->ball_y-memory->computer_y)/((PLAYER_H+1)/2);
+		float diff = (memory->ball_y-memory->computer_y)/((PLAYER_H+0.1)/2);
 		memory->ball_sin = diff;
 		memory->ball_cos = -sqrt(1-diff*diff);
 	}

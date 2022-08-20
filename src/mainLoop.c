@@ -10,6 +10,8 @@ int breakGame = 0;
 
 void SetupCallbacks(const Callbacks * callbacksNew)
 {
+    // Clear the pressed keys buffer
+    Keyboard_GetPressedKeys();
     // Maybe a previous game needs to clear the heap
     if (_callbacks.deinitCallback) (*_callbacks.deinitCallback)();
     // Initialize/reset a new game
