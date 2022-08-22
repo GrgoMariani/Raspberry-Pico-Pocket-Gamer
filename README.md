@@ -8,24 +8,17 @@ A Raspberry Pico __RP2040__ and __ILI9341__ based pocket console.
 
 
 ## Description
-Since the Pico came out I wanted to create a project for it that I can show my son to, so I decided to make him a Pocket Console. The game repertoire is quite basic and consists of 14 different games.
+
+Since the Pico came out I wanted to create a project for it that I can show my son to, so I decided to make him a Pocket Console. The game repertoire is quite basic and consists of fourteen different games.
 
 ## Game list
-
-* TicTacToe1P
-* TicTacToe2P
-* Lights Out
-* Math
-* Tetramino
-* Labirinth
-* Connect4 1P
-* Connect4 2P
-* 2048
-* Paint.NOT
-* Snake
-* Calculator
-* Pong
-* Breakout
+|              |             |            |
+|:------------:|:-----------:|:----------:|
+| TicTacToe 1P | Labirinth   | Snake      |
+| TicTacToe 2P | Connect4 1P | Calculator |
+| Lights Out   | Connect4 2P | Pong       |
+| Math         | 2048        | Breakout   |
+| Tetramino    | Paint.NOT   |            |
 
 ## Hardware
 Required components:
