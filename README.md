@@ -2,6 +2,8 @@
 
 A Raspberry Pico __RP2040__ and __ILI9341__ based pocket console.
 
+[Featured on MagPi Issue #122](https://magpi.raspberrypi.com/articles/pico-pocket-gamer)
+
 > Watch the video by clicking on the image
 
 [![Raspberry Pico Pocket Gamer Video](https://img.youtube.com/vi/271OoiJQUyk/0.jpg)](https://www.youtube.com/watch?v=271OoiJQUyk "Raspberry Pico Pocket Gamer Video")
