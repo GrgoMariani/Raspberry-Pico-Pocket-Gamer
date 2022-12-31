@@ -135,9 +135,9 @@ void GPU_DrawEmptySquare(GPU_Color color, int16_t x, int16_t y, int16_t width, i
 
 void GPU_DrawFilledSquare(GPU_Color color, int16_t x, int16_t y, int16_t width, int16_t height)
 {
-    for (uint8_t i=0; i<width; i++)
+    for (int16_t i=0; i<width; i++)
     {
-        for (uint8_t j=0; j<height; j++)
+        for (int16_t j=0; j<height; j++)
         {
             GPU_DrawPixel(color, x+i, y+j);
         }    
