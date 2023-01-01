@@ -64,7 +64,8 @@ ILI9341 to Pico pin connections looks like this:
  SDO    <-----> PIN 4
  LED    <-----> PIN 26 (or directly to 3v3)
  SCK    <-----> PIN 6
- DC     <-----> PIN 7
+ SDI    <-----> PIN 7
+ DC     <-----> PIN 18
  RESET  <-----> PIN 17
  CS     <-----> PIN 16
  GND    <-----> GND
