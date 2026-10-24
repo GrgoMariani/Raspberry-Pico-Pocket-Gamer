@@ -170,7 +170,7 @@ static void G_Init(void)
         memory->_goalx = 15;
         memory->_goaly = 15;
     } while(IsGoalAchieved());
-    memory->_map[memory->_goalx][memory->_goalx] |= MA_GOAL;
+    memory->_map[memory->_goalx][memory->_goaly] |= MA_GOAL;
     _ClearWall(memory->_goalx, memory->_goaly, MA_WALLLEFT);
     _ClearWall(memory->_goalx, memory->_goaly, MA_WALLRIGHT);
     _ClearWall(memory->_goalx, memory->_goaly, MA_WALLUP);
@@ -197,7 +197,6 @@ static void G_Update(void)
     
     while (mainMemory._lastRenderedTick < nowTick)
     {
-	    KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
         mainMemory._lastRenderedTick++;
         if (keyboard_held != KEY_NONE)
         {
@@ -379,7 +378,7 @@ static void DrawWall(int16_t x)
     if (drawEnd >= SCR_HEIGHT)
         drawEnd = SCR_HEIGHT - 1;
 
-    GPU_Color color;
+    GPU_Color color = C_WHITE;
     uint8_t drawTexture = 0;
     switch ((mapX + mapY) & 0x07)
     {
@@ -477,12 +476,24 @@ static void DrawWall(int16_t x)
 static void G_Draw(void)
 {
     GPU_ClearFramebuffers();
+    /* a bit of sky and floor behind the raycasted view */
+    GPU_DrawVerticalGradient(RGB(10,10,30), RGB(30,30,60), 0, 0, GPU_X/2, GPU_Y/2);
+    GPU_DrawVerticalGradient(RGB(40,36,30), RGB(12,10,8), 0, GPU_Y/2, GPU_X/2, GPU_Y/2);
 
     // Draw Map
     uint8_t x = (uint8_t)memory->posX;
     uint8_t y = (uint8_t)memory->posY;
-    // Draw player
-    GPU_DrawFilledSquare(C_GREEN, START_X + x*BLOCK_SIZE, START_Y + y*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    GPU_DrawPanel(RGB(12,14,36), C_GRAY_DARK, (int16_t)(START_X-3), (int16_t)(START_Y-3),
+                  (int16_t)(16*BLOCK_SIZE+6), (int16_t)(16*BLOCK_SIZE+6));
+    // Draw player as an arrow pointing into the view direction
+    {
+        int16_t px = (int16_t)(START_X + x*BLOCK_SIZE + BLOCK_SIZE/2);
+        int16_t py = (int16_t)(START_Y + y*BLOCK_SIZE + BLOCK_SIZE/2);
+        int16_t tx = (int16_t)(px + (int16_t)(memory->dirX*BLOCK_SIZE));
+        int16_t ty = (int16_t)(py + (int16_t)(memory->dirY*BLOCK_SIZE));
+        GPU_DrawFilledCircle(C_GREEN, px, py, (int16_t)(BLOCK_SIZE/2-1));
+        GPU_DrawLine(C_WHITE, px, py, tx, ty);
+    }
     for (uint8_t i=0; i<16; i++)
         for (uint8_t j=0; j<16; j++)
         {

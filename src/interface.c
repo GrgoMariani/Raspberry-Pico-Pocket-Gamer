@@ -8,6 +8,7 @@
 #include "interface/ili9341_touchscreen.h"
 
 #include "pico/time.h"
+#include "hardware/structs/rosc.h"
 
 #define KEY_PIN_MENU 0
 #define KEY_PIN_UP 15
@@ -15,15 +16,28 @@
 #define KEY_PIN_LEFT 28
 #define KEY_PIN_RIGHT 14
 
-static uint32_t startTime = 0;
+/*
+ * The ring oscillator of the RP2040 delivers a few genuinely unpredictable
+ * bits. They are mixed into the seed of the random generator together with the
+ * (microsecond resolution) boot time, so that a game does not play out the same
+ * way on every power up.
+ */
+static uint32_t _hardwareEntropy(void)
+{
+    /* the ring oscillator delivers one genuinely random bit per read */
+    uint32_t entropy = 0;
+    for (uint8_t i = 0; i < 32; i++)
+        entropy = (entropy << 1) | (rosc_hw->randombit & 1u);
+    return entropy;
+}
+
 void IF_Setup()
 {
-	startTime = IF_GetCurrentTime();
 	ili9341_init_SPI();
 	ili9341_init_display();
 	ili9341_init_drawing();
 	ILI9341_T_Init();
-	
+
     gpio_init(KEY_PIN_MENU);
 	gpio_init(KEY_PIN_UP);
 	gpio_init(KEY_PIN_DOWN);
@@ -39,6 +53,8 @@ void IF_Setup()
 	gpio_pull_up(KEY_PIN_DOWN);
 	gpio_pull_up(KEY_PIN_LEFT);
 	gpio_pull_up(KEY_PIN_RIGHT);
+
+	Random_Seed(IF_GetCurrentTime() ^ _hardwareEntropy() ^ (uint32_t)(uintptr_t)&IF_Setup);
 }
 
 uint32_t IF_GetCurrentTime()
@@ -53,45 +69,41 @@ void IF_DrawScreen(uint8_t * _framebuffer, size_t _framebufferSize)
 	ili9341_write_buffer(_framebuffer, _framebufferSize);
 }
 
-static uint32_t last_seed = 0xdeadb0d1;
-
 uint32_t IF_Random()
 {
-    uint32_t now = IF_GetCurrentTime();
-    uint32_t result = ((uint32_t)(142*now * now + 13*now + 203) >> 4)+last_seed;
-    last_seed = result;
-    return result;
+    return Random_Next();
 }
 
 void IF_Keyboard(void)
 {
-	// this should have been covered with interrupts
-	// try searching for "Switch bouncing" to learn more
+	// Debouncing is done in gameshared, these are the raw switch levels.
 	if (gpio_get(KEY_PIN_MENU) == 0)
 		Key_Down(KEY_MENU);
-	else 
+	else
 		Key_Up(KEY_MENU);
 	if (gpio_get(KEY_PIN_LEFT) == 0)
 		Key_Down(KEY_LEFT);
-	else 
+	else
 		Key_Up(KEY_LEFT);
 	if (gpio_get(KEY_PIN_RIGHT) == 0)
 		Key_Down(KEY_RIGHT);
-	else 
+	else
 		Key_Up(KEY_RIGHT);
 	if (gpio_get(KEY_PIN_UP) == 0)
 		Key_Down(KEY_UP);
-	else 
+	else
 		Key_Up(KEY_UP);
 	if (gpio_get(KEY_PIN_DOWN) == 0)
 		Key_Down(KEY_DOWN);
-	else 
+	else
 		Key_Up(KEY_DOWN);
 }
 
 uint8_t IF_Touchscreen()
 {
-	uint8_t result = ILI9341_T_TouchGetCoordinates(&mainMemory.touch_X, &mainMemory.touch_Y);
-	mainMemory.touchPressed = result;
-	return result;
+	uint16_t x = 0;
+	uint16_t y = 0;
+	uint8_t pressed = ILI9341_T_TouchGetCoordinates(&x, &y) ? 1 : 0;
+	Touch_Update(pressed, x, y);
+	return pressed;
 }

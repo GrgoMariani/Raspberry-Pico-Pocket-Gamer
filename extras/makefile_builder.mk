@@ -88,7 +88,7 @@ $(orig_o_dir)/cpp/%.o : %.cpp makefile_builder.mk | $$(@D)/. $(orig_d_dir)/cpp/$
 	g++ $(CXX_FLAGS) $(DEPFLAGS_CPP_ORIG) $(INCLUDE_DIRS) -c $< -o $@
 
 #  ------------------- link final target -------------------
-$(TARGET): $(ORIG_ASM_OBJS) $(ORIG_C_OBJS) $(ORIG_CPP_OBJS) makefile | $$(@D)/.
+$(TARGET): $(ORIG_ASM_OBJS) $(ORIG_C_OBJS) $(ORIG_CPP_OBJS) makefile_builder.mk | $$(@D)/.
 	@$(ECHO) $(ANSI_GREEN) ----------- Linking : $@ ----------------- $(ANSI_DEFAULT)
 	g++ $(ORIG_ASM_OBJS) $(ORIG_C_OBJS) $(ORIG_CPP_OBJS) $(LINKER_FLAGS) -o $@ -s
 	@$(ECHO) $(ANSI_RED) ----------- DONE: Target $@ ----------- $(ANSI_DEFAULT)

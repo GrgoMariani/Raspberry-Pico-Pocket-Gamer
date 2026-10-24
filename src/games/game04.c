@@ -1,4 +1,4 @@
-// MATH
+// MATH - answer the sum by tapping the result
 
 #include "../mainLoop.h"
 #include "../gpu.h"
@@ -29,6 +29,8 @@ typedef struct {
     uint32_t _guessesCorrect;
     uint32_t _guessesTotal;
     uint8_t is_touch_held;
+    uint8_t _flash;
+    uint8_t _flashAnswer;
 } Game4Memory;
 
 static Game4Memory * const memory = (Game4Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -42,15 +44,15 @@ static void GenerateAddition(uint8_t num)
         memory->_y = 0;
         return;
     }
-    uint8_t rand = IF_Random() % num;
-    memory->_x = num - rand;
+    uint8_t rand = (uint8_t)Random_Range(num);
+    memory->_x = (uint8_t)(num - rand);
     memory->_y = rand;
 }
 
 static void GenerateSubtraction(uint8_t num)
 {
-    uint8_t rand = IF_Random() % (255-num);
-    memory->_x = num + rand;
+    uint8_t rand = (uint8_t)Random_Range(255-num);
+    memory->_x = (uint8_t)(num + rand);
     memory->_y = rand;
 }
 
@@ -59,10 +61,10 @@ static void GenerateMultiplication(uint8_t num)
     if (!num)
     {
         while (!memory->_answer)
-            memory->_answer = IF_Random() % 16;
+            memory->_answer = (uint8_t)Random_Range(16);
         num = memory->_answer;
     }
-    uint8_t rand = (IF_Random() % num) + 1;
+    uint8_t rand = (uint8_t)(Random_Range(num) + 1);
     int i = num;
     while (1)
     {
@@ -74,8 +76,8 @@ static void GenerateMultiplication(uint8_t num)
         i--;
         if (i == 0) i = num;
     }
-    memory->_x = i;
-    memory->_y = num/i;
+    memory->_x = (uint8_t)i;
+    memory->_y = (uint8_t)(num/i);
 }
 
 static void GenerateDivision(uint8_t num)
@@ -83,17 +85,17 @@ static void GenerateDivision(uint8_t num)
     if (!num)
     {
         while (!memory->_answer)
-            memory->_answer = IF_Random() % 16;
+            memory->_answer = (uint8_t)Random_Range(16);
         num = memory->_answer;
     }
-    memory->_y = (IF_Random() &0x0f) + 1;
-    memory->_x = memory->_y * num;
+    memory->_y = (uint8_t)((Random_Next() & 0x0f) + 1);
+    memory->_x = (uint8_t)(memory->_y * num);
 }
 
 static void GenerateNewAnswer()
 {
-    uint32_t rand = IF_GetCurrentTime();
-    memory->_answer = rand & 0x0f;
+    uint32_t rand = Random_Next();
+    memory->_answer = (uint8_t)(rand & 0x0f);
     switch ((rand & 0x30)>>4)
     {
     case 0:
@@ -109,10 +111,9 @@ static void GenerateNewAnswer()
         GenerateDivision(memory->_answer);
         break;
     case 3:
+    default:
         memory->_arithmeticOperation = AO_MULTIPLY;
         GenerateMultiplication(memory->_answer);
-        break;
-    default:
         break;
     }
 }
@@ -123,41 +124,46 @@ static void G_Init(void)
     memory->_guessesCorrect = 0;
     memory->_guessesTotal = 0;
     memory->is_touch_held = 0;
+    memory->_flash = 0;
     GenerateNewAnswer();
+    mainMemory._gameState = GS_RUNNING;
 }
 
 
 #define BOX_W ((GPU_X/2)/4)
 #define BOX_H (GPU_Y/4)
 
+static void Answer(uint8_t answer)
+{
+    if (answer == memory->_answer)
+    {
+        memory->_lastGuess = GR_CORRECT;
+        memory->_guessesCorrect++;
+    }
+    else
+    {
+        memory->_lastGuess = GR_WRONG;
+    }
+    memory->_guessesTotal++;
+    memory->_flash = 8;
+    memory->_flashAnswer = answer;
+    GenerateNewAnswer();
+}
 
 static void G_Update(void)
 {
-    if (mainMemory.touchPressed && !memory->is_touch_held)
+    if (memory->_flash)
+        memory->_flash--;
+    if (mainMemory.touchPressedNew)
     {
-        memory->is_touch_held=1;
-        if (mainMemory.touch_X >= GPU_X/2 && mainMemory.touch_X <= GPU_X && mainMemory.touch_Y >= 0 && mainMemory.touch_Y <= GPU_Y)
+        if (mainMemory.touch_X >= GPU_X/2 && mainMemory.touch_X < GPU_X &&
+            mainMemory.touch_Y < GPU_Y)
         {
-            uint8_t x = (mainMemory.touch_X - GPU_X/2)/BOX_W;
-            uint8_t y = mainMemory.touch_Y/BOX_H;
-            uint8_t answer = 4*y+x;
-            if (answer == memory->_answer)
-            {
-                memory->_lastGuess = GR_CORRECT;
-                memory->_guessesCorrect++;
-                memory->_guessesTotal++;
-            }
-            else
-            {
-                memory->_lastGuess = GR_WRONG;
-                memory->_guessesTotal++;
-            }
-            GenerateNewAnswer();
+            uint8_t x = (uint8_t)((mainMemory.touch_X - GPU_X/2)/BOX_W);
+            uint8_t y = (uint8_t)(mainMemory.touch_Y/BOX_H);
+            if (x < 4 && y < 4)
+                Answer((uint8_t)(4*y + x));
         }
-    }
-    if (!mainMemory.touchPressed)
-    {
-        memory->is_touch_held = 0;
     }
 }
 
@@ -165,90 +171,75 @@ static void G_Update(void)
 static void G_Draw(void)
 {
     const FontDescription * f = &fontDescription[0];
-    const FontDescription * f_medium = &fontDescription[1];
     const FontDescription * f_big = &fontDescription[2];
     const FontDescription * f_huge = &fontDescription[3];
     GPU_ClearFramebuffers();
-    char buffer[8];
+    GPU_DrawVerticalGradient(RGB(10,14,40), C_BLACK, 0, 0, GPU_X/2, GPU_Y);
+    char buffer[16];
     uint8_t ll;
+
+    /* the sum */
+    GPU_DrawPanel(RGB(16,20,56), C_C1, 8, 8, (int16_t)(GPU_X/2-16), 150);
     {
-        sprintf(buffer, "%d", memory->_x);
-        ll = strlen(buffer);
-        GPU_DrawText(C_GREEN, f_huge, GPU_X/4 - (ll - 1)*f_huge->width/2, GPU_Y/2-4*f_huge->height/2, buffer, ll);
+        sprintf(buffer, "%u", memory->_x);
+        ll = (uint8_t)strlen(buffer);
+        GPU_DrawTextCentered(C_GREEN, f_huge, GPU_X/4, 24, buffer);
         char symbol;
         switch (memory->_arithmeticOperation)
         {
-        case AO_PLUS:
-            symbol = '+';
-            break;
-        case AO_MINUS:
-            symbol = '-';
-            break;
-        case AO_DIVIDE:
-            symbol = '/';
-            break;
-        case AO_MULTIPLY:
-            symbol = '*';
-            break;
-        default:
-            symbol = ' ';
-            break;
+        case AO_PLUS:     symbol = '+'; break;
+        case AO_MINUS:    symbol = '-'; break;
+        case AO_DIVIDE:   symbol = '/'; break;
+        case AO_MULTIPLY: symbol = '*'; break;
+        default:          symbol = ' '; break;
         }
-        GPU_DrawLetter(C_GREEN, f_huge, GPU_X/4, GPU_Y/2-f_huge->height/2, symbol);
-        sprintf(buffer, "%d", memory->_y);
-        ll = strlen(buffer);
-        GPU_DrawText(C_GREEN, f_huge, GPU_X/4 - (ll - 1)*f_huge->width/2, GPU_Y/2+2*f_huge->height/2, buffer, ll);
+        GPU_DrawLetter(C_YELLOW, f_huge, (int16_t)(GPU_X/4 - f_huge->width/2), 66, symbol);
+        sprintf(buffer, "%u", memory->_y);
+        GPU_DrawTextCentered(C_GREEN, f_huge, GPU_X/4, 108, buffer);
+        GPU_DrawTextCentered(C_WHITE, f_huge, GPU_X/4, 150, "= ?");
     }
 
-    if (memory->_lastGuess == GR_CORRECT)
+    /* feedback */
+    if (memory->_flash)
     {
-        const char * message = "CORRECT ANSWER";
-        ll = strlen(message);
-        GPU_DrawText(C_BLUE, f_big, S1_CENTER_X - (ll/2)*f_big->width, GPU_Y/8, message, ll);
-    }
-    else if (memory->_lastGuess == GR_WRONG)
-    {
-        const char * message = "WRONG ANSWER";
-        ll = strlen(message);
-        GPU_DrawText(C_RED, f_big, S1_CENTER_X - (ll/2)*f_big->width, GPU_Y/8, message, ll);
+        if (memory->_lastGuess == GR_CORRECT)
+            GPU_DrawTextCentered(C_C3, f_big, GPU_X/4, 176, "CORRECT!");
+        else
+            GPU_DrawTextCentered(C_RED, f_big, GPU_X/4, 176, "WRONG!");
     }
 
+    /* score */
     {
-        const char * message = "Correct:";
-        uint8_t len = strlen(message);
-        GPU_DrawText(C_GREEN, f, 8, 3*GPU_Y/4, message, len);
-        len = sprintf(buffer, "%d", memory->_guessesCorrect);
-        GPU_DrawText(C_GREEN, f, 60, 3*GPU_Y/4+f->height, buffer, len);
-    }
-    {
-        const char * message = "Total:";
-        uint8_t len = strlen(message);
-        GPU_DrawText(C_WHITE, f, 8, 3*GPU_Y/4 + 2*f->height, message, len);
-        len = sprintf(buffer, "%d", memory->_guessesTotal);
-        GPU_DrawText(C_WHITE, f, 60, 3*GPU_Y/4+3*f->height, buffer, len);
+        GPU_DrawPanel(RGB(16,20,56), C_GRAY_DARK, 8, 200, (int16_t)(GPU_X/2-16), 32);
+        ll = (uint8_t)sprintf(buffer, "%u/%u", (unsigned)memory->_guessesCorrect, (unsigned)memory->_guessesTotal);
+        GPU_DrawText(C_WHITE, f, 14, 206, buffer, ll);
+        if (memory->_guessesTotal)
+        {
+            ll = (uint8_t)sprintf(buffer, "%u%%", (unsigned)(memory->_guessesCorrect*100/memory->_guessesTotal));
+            GPU_DrawText(C_YELLOW, f, 90, 206, buffer, ll);
+        }
     }
 
-    if (memory->_lastGuess != GR_NO_GUESS)
-    {
-        uint8_t len = sprintf(buffer, "%d%%", (memory->_guessesCorrect*100/memory->_guessesTotal));
-        GPU_DrawText(C_YELLOW, f, GPU_X/2 - len*f->width, f->height, buffer, len);
-    }
-    
+    /* the keypad */
     const char nums[16] = "0123456789ABCDEF";
     for (uint8_t i=0; i<4; i++)
 		for (uint8_t j=0; j<4; j++)
 		{
-			GPU_DrawFilledSquare(C_WHITE, GPU_X/2+i*BOX_W+1, j*BOX_H+1, BOX_W-2, BOX_H-2);
-			uint8_t value = 4*j+i;
+			uint8_t value = (uint8_t)(4*j+i);
+			GPU_Color key = (memory->_flash && value == memory->_flashAnswer)
+			                ? ((memory->_lastGuess == GR_CORRECT) ? C_C3 : C_RED) : C_WHITE;
+			GPU_DrawBevelSquare(key, (int16_t)(GPU_X/2+i*BOX_W+2), (int16_t)(j*BOX_H+2),
+			                    (int16_t)(BOX_W-4), (int16_t)(BOX_H-4));
+			char label[2] = { nums[value], 0 };
 			if (value < 10)
 			{
-				GPU_DrawLetter(C_BLACK, f_huge, GPU_X/2+i*BOX_W + BOX_W/2 - f_huge->width/2, j*BOX_H+BOX_H/2-f_huge->height/2, nums[value]);
+				GPU_DrawTextCentered(C_BLACK, f_huge, (int16_t)(GPU_X/2+i*BOX_W+BOX_W/2),
+				                     (int16_t)(j*BOX_H+BOX_H/2-f_huge->height/2), label);
 			}
 			else
 			{
-				value -= 10;
-				GPU_DrawLetter(C_BLACK, f_huge, GPU_X/2+i*BOX_W + BOX_W/2 - f_huge->width, j*BOX_H+BOX_H/2-f_huge->height/2, '1');
-				GPU_DrawLetter(C_BLACK, f_huge, GPU_X/2+i*BOX_W + BOX_W/2, j*BOX_H+BOX_H/2-f_huge->height/2, nums[value]);
+				GPU_DrawTextCentered(C_BLACK, f_big, (int16_t)(GPU_X/2+i*BOX_W+BOX_W/2),
+				                     (int16_t)(j*BOX_H+BOX_H/2-f_big->height/2), label);
 			}
 		}
 }

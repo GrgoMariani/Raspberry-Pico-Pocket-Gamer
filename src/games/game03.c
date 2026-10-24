@@ -40,10 +40,10 @@ static void TogglePosition(uint8_t x, uint8_t y)
 	if (mainMemory._gameState == GS_DONE || x > 4 || y > 4)
 		return;
 	ToggleLight(x, y);
-	ToggleLight(x-1, y);
-	ToggleLight(x+1, y);
-	ToggleLight(x, y-1);
-	ToggleLight(x, y+1);
+	ToggleLight((uint8_t)(x-1), y);
+	ToggleLight((uint8_t)(x+1), y);
+	ToggleLight(x, (uint8_t)(y-1));
+	ToggleLight(x, (uint8_t)(y+1));
 	++memory->_stepsCount;
 }
 
@@ -59,35 +59,33 @@ static uint8_t IsGameFinished()
 static void G_Init(void)
 {
 	mainMemory._gameState = GS_RUNNING;
-	uint32_t rand = IF_Random();
 	memory->_stepsCount = 0;
 	for (uint8_t i=0; i<5; i++)
 		for (uint8_t j=0; j<5; j++)
 		{
 			memory->_lights[i][j] = LO_OFF;
 		}
-	for (uint8_t i=0; i<5; i++)
-		for (uint8_t j=0; j<5; j++)
+	/* scramble by pressing random cells, which guarantees solvability.
+	   Repeating until the board is not already solved avoids an instant win. */
+	do
+	{
+		for (uint8_t i=0; i<5; i++)
+			for (uint8_t j=0; j<5; j++)
+				memory->_lights[i][j] = LO_OFF;
+		for (uint8_t n=0; n<10; n++)
 		{
-			if (rand & (1<<(i*5+j)))
-			{
-				TogglePosition(i, j);
-				TogglePosition(i+1, j+2);
-				TogglePosition(i-2, j);
-			}
+			uint8_t x = (uint8_t)Random_Range(5);
+			uint8_t y = (uint8_t)Random_Range(5);
+			ToggleLight(x, y);
+			ToggleLight((uint8_t)(x-1), y);
+			ToggleLight((uint8_t)(x+1), y);
+			ToggleLight(x, (uint8_t)(y-1));
+			ToggleLight(x, (uint8_t)(y+1));
 		}
+	} while (IsGameFinished());
 	memory->_stepsCount = 0;
 	memory->is_touch_pressed = 0;
 }
-
-/*
-#define START_X (GPU_BORDER_X)
-#define START_Y (GPU_BORDER_Y)
-#define END_X (GPU_X/2-GPU_BORDER_X)
-#define END_Y (GPU_Y-GPU_BORDER_Y)
-#define HW_BOX (END_X-START_X)
-#define BOX_WIDTH (HW_BOX/5)
-*/
 
 #define START_X (0)
 #define START_Y (0)
@@ -96,12 +94,10 @@ static void G_Init(void)
 #define HW_BOX (END_X-START_X)
 #define BOX_WIDTH (HW_BOX/5)
 
-
-#define RESET_BUTTON_W (5*16)
+#define RESET_BUTTON_W (80)
 #define RESET_BUTTON_H (30)
 #define RESET_BUTTON_X (S2_CENTER_X - RESET_BUTTON_W/2)
-#define RESET_BUTTON_Y (S2_CENTER_Y + 30)
-
+#define RESET_BUTTON_Y (S2_CENTER_Y + 40)
 
 static void G_Update(void)
 {
@@ -109,32 +105,22 @@ static void G_Update(void)
 	{
 		mainMemory._gameState = GS_DONE;
 	}
-	else
+	else if (mainMemory._gameState == GS_RUNNING)
 	{
-		if (mainMemory._gameState == GS_RUNNING)
+		if (mainMemory.touchPressedNew)
 		{
-			if (mainMemory.touchPressed && !memory->is_touch_pressed)
+			if (mainMemory.touch_X <= END_X && mainMemory.touch_Y <= END_Y)
 			{
-				memory->is_touch_pressed = 1;
-				uint8_t x=5,y=5;
-				if (mainMemory.touch_X < START_X || mainMemory.touch_X > END_X || mainMemory.touch_Y < START_Y || mainMemory.touch_Y > END_Y)
-					return;
-				mainMemory.touch_X -= START_X;
-				mainMemory.touch_Y -= START_Y;
-				x = mainMemory.touch_X / (BOX_WIDTH);
-				y = mainMemory.touch_Y / (BOX_WIDTH);
+				uint8_t x = (uint8_t)(mainMemory.touch_X / BOX_WIDTH);
+				uint8_t y = (uint8_t)(mainMemory.touch_Y / BOX_WIDTH);
 				if (x < 5 && y < 5)
 					TogglePosition(x, y);
-			}
-			if (!mainMemory.touchPressed)
-			{
-				memory->is_touch_pressed = 0;
 			}
 		}
 	}
 	if (mainMemory._gameState != GS_RUNNING)
 	{
-		if (mainMemory.touchPressed)
+		if (mainMemory.touchPressedNew)
 		{
 			if (mainMemory.touch_X >= RESET_BUTTON_X && mainMemory.touch_X <= RESET_BUTTON_X+RESET_BUTTON_W && mainMemory.touch_Y >= RESET_BUTTON_Y && mainMemory.touch_Y <= RESET_BUTTON_Y+RESET_BUTTON_H)
 				G_Init();
@@ -144,9 +130,26 @@ static void G_Update(void)
 
 
 #define CENTER_S2_X ((GPU_X-END_X)/2 + END_X)
-#define CENTER_S2_Y ((GPU_Y/2)
 #define S2_W (GPU_X-END_X)
-#define S2_H (GPU_X-END_X)
+
+static void DrawLamp(int16_t x, int16_t y, int16_t size, uint8_t on, uint8_t flash)
+{
+	int16_t cx = (int16_t)(x + size/2);
+	int16_t cy = (int16_t)(y + size/2);
+	int16_t r = (int16_t)(size/2 - 3);
+	if (on)
+	{
+		GPU_DrawFilledCircle(flash ? C_WHITE : C_YELLOW, cx, cy, r);
+		GPU_DrawFilledCircle(RGB(255,255,200), (int16_t)(cx - r/3), (int16_t)(cy - r/3), (int16_t)(r/3));
+		GPU_DrawEmptyCircle(GPU_ShadeColor(C_YELLOW, 150), cx, cy, r);
+	}
+	else
+	{
+		GPU_DrawFilledCircle(RGB(40,40,48), cx, cy, r);
+		GPU_DrawEmptyCircle(C_GRAY_DARK, cx, cy, r);
+		GPU_DrawEmptyCircle(RGB(24,24,30), cx, cy, (int16_t)(r-3));
+	}
+}
 
 static void G_Draw(void)
 {
@@ -154,6 +157,7 @@ static void G_Draw(void)
 	const FontDescription * f_med = &fontDescription[2];
 	const FontDescription * f_big = &fontDescription[3];
 	GPU_ClearFramebuffers();
+	GPU_DrawVerticalGradient(RGB(12,12,36), C_BLACK, 0, 0, GPU_X, GPU_Y);
 
 	if (mainMemory._gameState == GS_RUNNING)
 	{
@@ -162,68 +166,46 @@ static void G_Draw(void)
 		{
 			for(uint8_t j=0; j<5; j++)
 			{
-				if (memory->_lights[i][j] == LO_OFF)
-				{
-					GPU_DrawEmptySquare(C_YELLOW, START_X + i*BOX_WIDTH, START_Y+j*BOX_WIDTH, BOX_WIDTH-1, BOX_WIDTH-1);
-				}
-				else
-				{
+				if (memory->_lights[i][j] == LO_ON)
 					lights_on++;
-					GPU_DrawFilledSquare(C_YELLOW, START_X + i*BOX_WIDTH, START_Y+j*BOX_WIDTH, BOX_WIDTH-1, BOX_WIDTH-1);
-				}
+				DrawLamp((int16_t)(START_X + i*BOX_WIDTH + 2), (int16_t)(START_Y + j*BOX_WIDTH + 2),
+				         (int16_t)(BOX_WIDTH - 4), (uint8_t)(memory->_lights[i][j] == LO_ON), 0);
 			}
 		}
-		const char * message1 = "Steps counter";
-		uint8_t len = strlen(message1);
-		GPU_DrawText(C_YELLOW, f, CENTER_S2_X-f->width*len/2, GPU_Y/8-f->height/2, message1, len);
-		GPU_DrawFilledSquare(C_WHITE, GPU_X-S2_W, GPU_Y/4, S2_W, GPU_Y/2);
+		GPU_DrawPanel(RGB(16,16,48), C_GRAY_DARK, (int16_t)(GPU_X-S2_W+6), 8, (int16_t)(S2_W-12), 96);
+		GPU_DrawTextCentered(C_YELLOW, f, CENTER_S2_X, 16, "STEPS");
 		char number[8];
-		len = sprintf(number, "%d", memory->_stepsCount);
-		GPU_DrawText(C_BLACK, f_med, CENTER_S2_X-len*f_med->width/2, GPU_Y/2-f_med->height/2, number, strlen(number));
-		len = sprintf(number, "%d", lights_on);
-		GPU_DrawText(C_YELLOW, f, CENTER_S2_X - S2_W/2, GPU_Y*3/4+8+f->height/2, number, strlen(number));
-		const char * message2 = "lights on";
-		GPU_DrawText(C_YELLOW, f, CENTER_S2_X - S2_W/2 + f->width*3, GPU_Y*3/4+8+f->height/2, message2, strlen(message2));
+		sprintf(number, "%u", memory->_stepsCount);
+		GPU_DrawTextCentered(C_WHITE, f_med, CENTER_S2_X, 30, number);
+		GPU_DrawTextCentered(C_YELLOW, f, CENTER_S2_X, 62, "LIGHTS ON");
+		sprintf(number, "%u", lights_on);
+		GPU_DrawTextCentered(C_WHITE, f_med, CENTER_S2_X, 74, number);
 	}
 	else
 	{
 		uint32_t nowTime = IF_GetCurrentTime();
-		const char * message1 = "WELL DONE";
-		uint8_t len = strlen(message1);
-		GPU_DrawText(C_BLUE, f, CENTER_S2_X-f->width*len/2, GPU_Y/8, message1, len);
-		const char * message2 = "Steps";
-		len = strlen(message2);
-		GPU_DrawText(C_YELLOW, f, CENTER_S2_X-f->width*len/2, S2_CENTER_Y, message2, len);
+		GPU_DrawTextCentered(C_C3, f_big, CENTER_S2_X, 20, "WELL DONE");
 		char number[8];
-		len = sprintf(number, "%d", memory->_stepsCount);
-		GPU_DrawText(C_YELLOW, f, CENTER_S2_X-f->width*len/2, S2_CENTER_Y+f->height, number, len);
+		sprintf(number, "%u steps", memory->_stepsCount);
+		GPU_DrawTextCentered(C_YELLOW, f, CENTER_S2_X, 60, number);
 		for(uint8_t i=0; i<5; i++)
 		{
 			for(uint8_t j=0; j<5; j++)
 			{
-				if (nowTime & (1<<(i+5*j+7)))
-				{
-					GPU_DrawEmptySquare(C_WHITE, START_X + i*BOX_WIDTH, START_Y+j*BOX_WIDTH, BOX_WIDTH-1, BOX_WIDTH-1);
-				}
-				else
-				{
-					GPU_DrawFilledSquare(C_YELLOW, START_X + i*BOX_WIDTH, START_Y+j*BOX_WIDTH, BOX_WIDTH-1, BOX_WIDTH-1);
-				}
+				/* 1u: bit 31 of a signed int would be undefined behaviour */
+				uint8_t flash = (nowTime & (1u<<(i+5*j+7))) ? 1 : 0;
+				DrawLamp((int16_t)(START_X + i*BOX_WIDTH + 2), (int16_t)(START_Y + j*BOX_WIDTH + 2),
+				         (int16_t)(BOX_WIDTH - 4), (uint8_t)(!flash), 0);
 			}
 		}
-		// Draw reset button
-		{
-			const char * textToDisplay = "RESET";
-			int8_t len = strlen(textToDisplay);
-			GPU_DrawFilledSquare(C_YELLOW, RESET_BUTTON_X, RESET_BUTTON_Y, RESET_BUTTON_W, RESET_BUTTON_H);
-			GPU_DrawText(C_BLACK, f_big, RESET_BUTTON_X, RESET_BUTTON_Y, textToDisplay, len);
-		}
+		GPU_DrawButton(C_YELLOW, C_BLACK, f_big, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
+		               RESET_BUTTON_W, RESET_BUTTON_H);
 	}
 }
 
 static void G_Deinit(void)
 {
-	
+
 }
 
 const Callbacks G3_Callbacks = { &G_Init, &G_Update, &G_Draw, &G_Deinit};

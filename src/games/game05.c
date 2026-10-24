@@ -32,7 +32,14 @@ typedef struct {
     uint8_t _nextWH;
     int8_t _activeX;
     int8_t _activeY;
+    GPU_Color _activeColor;
+    GPU_Color _nextColor;
 } Game5Memory;
+
+/* one colour per shape, like the modern games do it */
+static const GPU_Color _pieceColor[7] = {
+    C_CYAN, C_BLUE, C_ORANGE, C_YELLOW, C_GREEN, C_MAGENTA, C_RED
+};
 
 static Game5Memory * const memory = (Game5Memory*)(&mainMemory.sharedMemory.memblocks[0]);
 
@@ -58,6 +65,7 @@ static uint32_t CalculateCurrentTick()
 static void _GenerateNextTetramino()
 {
     Tetramino randTetramino = GetRandomTetramino();
+    memory->_nextColor = _pieceColor[randTetramino];
     for (uint8_t i=0; i<4; i++)
         for (uint8_t j=0; j<4; j++)
             memory->_nextTetramino[i][j] = TF_EMPTY;
@@ -130,13 +138,17 @@ static void _PushTetramino()
         for (uint8_t j=0; j<4; j++)
             memory->_activeTetramino[i][j] = memory->_nextTetramino[i][j];
     memory->_activeWH = memory->_nextWH;
+    memory->_activeColor = memory->_nextColor;
     memory->_activeX = 4;
     memory->_activeY = 0;
     _GenerateNextTetramino();
+    /* game over only when a cell of the new piece really collides, not when the
+       empty part of its 4x4 box touches the stack */
     for (uint8_t i=0; i<4; i++)
         for (uint8_t j=0; j<4; j++)
             {
-                if (_CheckCollision(memory->_activeX+i, memory->_activeY+j))
+                if (memory->_activeTetramino[i][j] == TF_OBJECT &&
+                    _CheckCollision(memory->_activeX+i, memory->_activeY+j))
                     {
                         mainMemory._gameState = GS_DONE;
                     }
@@ -198,7 +210,7 @@ static uint8_t _CheckRow(uint8_t y)
 static void _CheckField()
 {
     uint8_t final_score = 0;
-    for (int8_t i=19; i>0; i--)
+    for (int8_t i=19; i>=0; i--)
     {
         if (_CheckRow(i))
         {
@@ -211,7 +223,17 @@ static void _CheckField()
                     memory->_field[j-1][k] = TF_EMPTY;
                 }
             }
-            i++;
+            if (i == 0)
+            {
+                /* the top row has nothing above it to shift down */
+                for (int8_t k=0; k<10; k++)
+                    memory->_field[0][k] = TF_EMPTY;
+            }
+            else
+            {
+                /* the row that slid down into this place has to be checked too */
+                i++;
+            }
         }
     }
     memory->_score += final_score*(final_score+1)/2;
@@ -336,7 +358,7 @@ static void G_Update(void)
     }
     else
 	{
-		if (mainMemory.touchPressed)
+		if (mainMemory.touchPressedNew)
 		{
 			if (mainMemory.touch_X >= RESET_BUTTON_X && mainMemory.touch_X <= RESET_BUTTON_X+RESET_BUTTON_W && mainMemory.touch_Y >= RESET_BUTTON_Y && mainMemory.touch_Y <= RESET_BUTTON_Y+RESET_BUTTON_H)
 				G_Init();
@@ -353,20 +375,19 @@ static void G_Draw(void)
     const FontDescription * f = &fontDescription[1];
     GPU_ClearFramebuffers();
     // Draw map
+    GPU_DrawPanel(RGB(10,12,30), C_GRAY_DARK, (int16_t)(START_X-3), (int16_t)(START_Y-3),
+                  (int16_t)(10*BLOCK_SIZE+6), (int16_t)(20*BLOCK_SIZE+6));
     for (uint8_t i=0; i<20; i++)
         for (uint8_t j=0; j<10; j++)
         {
             if (memory->_field[i][j] == TF_EMPTY)
             {
-                GPU_DrawEmptySquare(C_GRAY_LIGHT, START_X + BLOCK_SIZE*j, START_Y + BLOCK_SIZE*i, BLOCK_SIZE-1, BLOCK_SIZE-1);
+                GPU_DrawPixel(RGB(40,44,64), (uint16_t)(START_X + BLOCK_SIZE*j + BLOCK_SIZE/2),
+                              (uint16_t)(START_Y + BLOCK_SIZE*i + BLOCK_SIZE/2));
             }
             else if (memory->_field[i][j] == TF_FULL)
             {
-                GPU_DrawFilledSquare(C_GRAY_MEDIUM, START_X + BLOCK_SIZE*j, START_Y + BLOCK_SIZE*i, BLOCK_SIZE-1, BLOCK_SIZE-1);
-            }
-            else if (memory->_field[i][j] == TF_OBJECT)
-            {
-
+                GPU_DrawBevelSquare(C_GRAY_MEDIUM, START_X + BLOCK_SIZE*j, START_Y + BLOCK_SIZE*i, BLOCK_SIZE-1, BLOCK_SIZE-1);
             }
         }
     // Draw current
@@ -374,41 +395,33 @@ static void G_Draw(void)
         for (uint8_t j=0; j<memory->_activeWH; j++)
         {
             if (memory->_activeTetramino[i][j] == TF_OBJECT)
-                GPU_DrawFilledSquare(C_YELLOW, START_X + BLOCK_SIZE*(i + memory->_activeX), START_Y + BLOCK_SIZE*(j + memory->_activeY), BLOCK_SIZE-1, BLOCK_SIZE-1);
+                GPU_DrawBevelSquare(memory->_activeColor, START_X + BLOCK_SIZE*(i + memory->_activeX), START_Y + BLOCK_SIZE*(j + memory->_activeY), BLOCK_SIZE-1, BLOCK_SIZE-1);
         }
     // Draw next
-    const char * txtNextOne = "Next:";
-    GPU_DrawText(C_WHITE, f, GPU_X/2+16, GPU_Y/8, txtNextOne, strlen(txtNextOne));
+    GPU_DrawPanel(RGB(16,18,48), C_GRAY_DARK, (int16_t)(GPU_X/2+8), 8, (int16_t)(GPU_X/2-16), 70);
+    const char * txtNextOne = "NEXT";
+    GPU_DrawTextCentered(C_GRAY_LIGHT, f, (int16_t)(GPU_X*3/4), 14, txtNextOne);
     for (uint8_t i=0; i<memory->_nextWH; i++)
         for (uint8_t j=0; j<memory->_nextWH; j++)
         {
             if (memory->_nextTetramino[j][i] == TF_OBJECT)
-                GPU_DrawFilledSquare(C_GRAY_MEDIUM, GPU_X/2+START_X+BLOCK_SIZE*j, GPU_Y/4+BLOCK_SIZE*i, BLOCK_SIZE-1, BLOCK_SIZE-1);
+                GPU_DrawBevelSquare(memory->_nextColor, (int16_t)(GPU_X/2+START_X+BLOCK_SIZE*j), (int16_t)(28+BLOCK_SIZE*i), BLOCK_SIZE-1, BLOCK_SIZE-1);
         }
     // Draw score
-    const char * txtScore = "Score:";
-    GPU_DrawText(C_BLUE, f, GPU_X/2+GPU_X/8, GPU_Y/2, txtScore, strlen(txtScore));
-    char txtScoreInt[9];
-    sprintf(txtScoreInt, "%d", memory->_score);
-    uint8_t lenScore = strlen(txtScoreInt);
-    GPU_DrawText(C_BLUE, f, S2_CENTER_X - (lenScore-1)*f->width, GPU_Y/2+2*f->height, txtScoreInt, lenScore);
+    GPU_DrawPanel(RGB(16,18,48), C_GRAY_DARK, (int16_t)(GPU_X/2+8), 86, (int16_t)(GPU_X/2-16), 54);
+    const char * txtScore = "SCORE";
+    GPU_DrawTextCentered(C_GRAY_LIGHT, f, (int16_t)(GPU_X*3/4), 92, txtScore);
+    char txtScoreInt[12];
+    sprintf(txtScoreInt, "%u", (unsigned)memory->_score);
+    GPU_DrawTextCentered(C_C1, f, (int16_t)(GPU_X*3/4), 110, txtScoreInt);
     if (mainMemory._gameState == GS_DONE)
     {
         const FontDescription * f_big = &fontDescription[3];
-        const char * txtGameOver1 = "GAME";
-        const char * txtGameOver2 = "OVER";
-        uint8_t goLen1 = strlen(txtGameOver1);
-        uint8_t goLen2 = strlen(txtGameOver2);
-        GPU_DrawFilledSquare(C_WHITE, 0, GPU_Y/4, GPU_X/2, GPU_Y/2);
-        GPU_DrawText(C_RED, f_big, S1_CENTER_X - (goLen1)*f_big->width/2, S1_CENTER_Y - f_big->height, txtGameOver1, goLen1);
-        GPU_DrawText(C_RED, f_big, S1_CENTER_X - (goLen2)*f_big->width/2, S1_CENTER_Y, txtGameOver2, goLen2);
-        // Draw reset button
-		{
-			const char * textToDisplay = "RESET";
-			int8_t len = strlen(textToDisplay);
-			GPU_DrawFilledSquare(C_YELLOW, RESET_BUTTON_X, RESET_BUTTON_Y, RESET_BUTTON_W, RESET_BUTTON_H);
-			GPU_DrawText(C_BLACK, f_big, RESET_BUTTON_X, RESET_BUTTON_Y, textToDisplay, len);
-		}
+        GPU_DrawPanel(RGB(16,18,48), C_RED, 4, (int16_t)(GPU_Y/4), (int16_t)(GPU_X/2-8), 110);
+        GPU_DrawTextCentered(C_RED, f_big, S1_CENTER_X, (int16_t)(GPU_Y/2-30), "GAME");
+        GPU_DrawTextCentered(C_RED, f_big, S1_CENTER_X, (int16_t)(GPU_Y/2-6), "OVER");
+        GPU_DrawButton(C_YELLOW, C_BLACK, f_big, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
+                       RESET_BUTTON_W, RESET_BUTTON_H);
     }
 }
 

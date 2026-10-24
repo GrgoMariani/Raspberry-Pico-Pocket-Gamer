@@ -33,3 +33,4 @@
 extras/build/*
 extras/olcPixelGameEngine.h
 .vscode/*
+build/

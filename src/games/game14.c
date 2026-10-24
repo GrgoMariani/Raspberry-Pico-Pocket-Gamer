@@ -237,17 +237,18 @@ static void G_Update(void)
 static void G_Draw(void)
 {
 	const FontDescription * f_big = &fontDescription[2];
+	const FontDescription * fm = &fontDescription[1];
     GPU_ClearFramebuffers();
+	GPU_DrawVerticalGradient(RGB(8,6,26), C_BLACK, 0, 0, GPU_X, GPU_Y);
 	// Draw Field
-	GPU_DrawEmptySquare(C_C2, EDGE_X, EDGE_Y, BOX_W, BOX_H);
+	GPU_DrawPanel(RGB(14,10,40), C_C2, EDGE_X, EDGE_Y, BOX_W, BOX_H);
 	// Draw Player
-	GPU_DrawFilledSquare(C_C1, EDGE_X+(memory->player_x+100.0f)/200.0f*BOX_W-PLAYER_W/2, GPU_Y-EDGE_Y-PLAYER_H/2, PLAYER_W, PLAYER_H);
+	GPU_DrawBevelSquare(C_C1, (int16_t)(EDGE_X+(memory->player_x+100.0f)/200.0f*BOX_W-PLAYER_W/2), (int16_t)(GPU_Y-EDGE_Y-PLAYER_H/2), (int16_t)PLAYER_W, PLAYER_H);
 	// Draw Blocks
 	
 	for (uint8_t i=0; i<6; i++)
 		for (uint8_t j=0; j<4; j++)
 		{
-			Block * active_block = &memory->blocks[i][j];
 			if (memory->blocks[i][j].lives)
 			{
 				GPU_Color color;
@@ -263,29 +264,43 @@ static void G_Draw(void)
 					color = C_WHITE;
 					break;
 				}
-				GPU_DrawFilledSquare(color, EDGE_X + (BLOCK_V_EDGE_X+(BLOCK_V_W+BLOCK_V_SEPARATOR_W)*i)/200.0f*BOX_W, EDGE_Y+(BLOCK_V_EDGE_Y+(BLOCK_V_H+BLOCK_V_SEPARATOR_H)*j)/200.0f*BOX_H, BLOCK_W, BLOCK_H);
+				GPU_DrawBevelSquare(color, (int16_t)(EDGE_X + (BLOCK_V_EDGE_X+(BLOCK_V_W+BLOCK_V_SEPARATOR_W)*i)/200.0f*BOX_W), (int16_t)(EDGE_Y+(BLOCK_V_EDGE_Y+(BLOCK_V_H+BLOCK_V_SEPARATOR_H)*j)/200.0f*BOX_H), (int16_t)BLOCK_W, (int16_t)BLOCK_H);
 			}
 		}
 	// Draw Ball
-	GPU_DrawFilledCircle(C_C3, EDGE_X + (memory->ball_x+100.0f)/200.0f*BOX_W, EDGE_Y + (memory->ball_y+100.0f)/200.0f*BOX_H, BALL_SIZE);
+	{
+		int16_t bx = (int16_t)(EDGE_X + (memory->ball_x+100.0f)/200.0f*BOX_W);
+		int16_t by = (int16_t)(EDGE_Y + (memory->ball_y+100.0f)/200.0f*BOX_H);
+		GPU_DrawFilledCircle(C_C3, bx, by, (int16_t)BALL_SIZE);
+		GPU_DrawPixel(RGB(255,255,255), (uint16_t)(bx-1), (uint16_t)(by-1));
+	}
+	// blocks left
+	{
+		uint8_t left = 0;
+		for (uint8_t i=0; i<6; i++)
+			for (uint8_t j=0; j<4; j++)
+				left = (uint8_t)(left + memory->blocks[i][j].lives);
+		char hud[16];
+		int hlen = sprintf(hud, "BLOCKS %u", left);
+		GPU_DrawText(C_GRAY_LIGHT, fm, 4, 4, hud, (uint16_t)hlen);
+	}
 	// Draw Text
 	if (memory->breakoutState != BS_PLAYING)
 	{
 		char text[32];
-		int len;
 		switch (memory->breakoutState)
 		{
 			case BS_GAME_OVER:
-				len = sprintf(text, "YOU LOSE");
+				sprintf(text, "YOU LOSE");
 				break;
 			case BS_GAME_WON:
-				len = sprintf(text, "YOU WIN");
+				sprintf(text, "YOU WIN");
 				break;
 			default:
-				len = sprintf(text, "PRESS ANY KEY TO START");
+				sprintf(text, "PRESS ANY KEY");
 				break;
 		}
-		GPU_DrawText(C_GREEN, f_big, GPU_X/2-len*f_big->width/2, GPU_Y/2-f_big->height/2, text, len);
+		GPU_DrawTextOutlined(C_GREEN, C_BLACK, f_big, GPU_X/2, (int16_t)(GPU_Y/2-f_big->height/2), text);
 	}
 }
 

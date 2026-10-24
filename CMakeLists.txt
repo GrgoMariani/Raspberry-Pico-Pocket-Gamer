@@ -1,3 +1,19 @@
+# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
+if(WIN32)
+    set(USERHOME $ENV{USERPROFILE})
+else()
+    set(USERHOME $ENV{HOME})
+endif()
+set(sdkVersion 2.3.1)
+set(toolchainVersion 15_2_Rel1)
+set(picotoolVersion 2.3.1)
+set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
+if (EXISTS ${picoVscode})
+    include(${picoVscode})
+endif()
+# ====================================================================================
+set(PICO_BOARD pico CACHE STRING "Board type")
+
 # Generated Cmake Pico project file
 
 cmake_minimum_required(VERSION 3.13)
@@ -26,10 +42,13 @@ add_executable(PocketGamer
         src/interface/ili9341_touchscreen.c
         src/gameshared.c
         src/gpu.c
+        src/gpu3d.c
         src/interface.c
+        src/touch.c
         src/mainLoop.c
         src/menu.c
         src/textures.c
+        src/games/tictactoe.c
         src/games/game01.c
         src/games/game02.c
         src/games/game03.c
@@ -44,7 +63,21 @@ add_executable(PocketGamer
         src/games/game12.c
         src/games/game13.c
         src/games/game14.c
+        src/games/game15.c
+        src/games/game16.c
+        src/games/game17.c
+        src/games/game18.c
+        src/games/game19.c
+        src/games/game20.c
+        src/games/game21.c
+        src/games/game22.c
+        src/games/game23.c
         )
+
+# Warnings for the project sources (SDK sources keep their own flags)
+
+# Warnings for the project sources (the SDK keeps its own flags)
+target_compile_options(PocketGamer PRIVATE -Wall -Wextra -Wshadow)
 
 pico_set_program_name(PocketGamer "PocketGamer")
 pico_set_program_version(PocketGamer "0.1")

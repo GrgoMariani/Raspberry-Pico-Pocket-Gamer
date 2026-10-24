@@ -4,6 +4,7 @@
 #include "hardware/spi.h"
 
 #include "ili9341_touchscreen.h"
+#include "../touch.h"
 
 #define SPI_PORT spi1
 
@@ -13,22 +14,27 @@
 #define PIN_CS   21
 #define PIN_IRQ  20
 
-// change depending on screen orientation
-#define ILI9341_TOUCH_SCALE_X 320
-#define ILI9341_TOUCH_SCALE_Y 240
+/*
+ * The XPT2046 is specified for fCLK <= 2.5MHz at VCC = 2.7..5.25V. The driver
+ * used to run at exactly that limit, which leaves no margin at all for the
+ * wiring and shows up as noisy (imprecise) samples. 2MHz is well inside the
+ * specification and the extra microseconds are irrelevant: a touch burst is a
+ * couple of dozen bytes only.
+ */
+#define TOUCH_SPI_HZ 2000000
 
-#define ILI9341_TOUCH_MIN_RAW_X 1500
-#define ILI9341_TOUCH_MAX_RAW_X 31000
-#define ILI9341_TOUCH_MIN_RAW_Y 3276
-#define ILI9341_TOUCH_MAX_RAW_Y 30110
-
+/*
+ * Control bytes: S=1, 12 bit mode, differential reference, power down between
+ * conversions. The channel that is called "X" here is the one that ends up in
+ * the game's x coordinate (see the note in touch.c).
+ */
 #define READ_X 0x90
 #define READ_Y 0xD0
 
 
 void ILI9341_T_Init()
 {
-    spi_init(SPI_PORT, 2500000);
+    spi_init(SPI_PORT, TOUCH_SPI_HZ);
 
     gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
@@ -39,84 +45,75 @@ void ILI9341_T_Init()
     gpio_set_dir(PIN_CS, GPIO_OUT);
     gpio_put(PIN_CS, 1);
 
-
     printf("Screen initialized\n");
     gpio_init(PIN_IRQ);
     gpio_set_dir(PIN_IRQ, GPIO_IN);
-    //gpio_pull_up(PIN_IRQ);
-    gpio_pull_down(PIN_IRQ);
+    // PENIRQ of the XPT2046 is open drain and active low, it needs a pull up
+    // (many modules have one on the PCB, the internal one makes it work on
+    //  boards without)
+    gpio_pull_up(PIN_IRQ);
 }
 
-static inline void ILI9341_TouchSelect() {
+static inline void ILI9341_TouchSelect(void) {
     asm volatile("nop \n nop \n nop");
     gpio_put(PIN_CS, 0);
     asm volatile("nop \n nop \n nop");
 }
 
-static void inline ILI9341_TouchUnselect() {
+static inline void ILI9341_TouchUnselect(void) {
     asm volatile("nop \n nop \n nop");
     gpio_put(PIN_CS, 1);
     asm volatile("nop \n nop \n nop");
 }
 
-static void inline send_bytes(uint8_t * data, uint8_t len) {
-    spi_write_blocking(SPI_PORT, data, len);
-}
-
-static bool inline ILI9341_TouchPressed() {
+static inline bool ILI9341_TouchPressed(void) {
     return (gpio_get(PIN_IRQ) == 0);
 }
 
-#define MAX_SAMPLES 8
+/* sends one control byte and clocks out the 12 bit result (left justified) */
+static uint16_t ILI9341_TouchReadChannel(uint8_t channel)
+{
+    uint8_t command = channel;
+    uint8_t result[2] = {0, 0};
+    spi_write_blocking(SPI_PORT, &command, 1);
+    spi_read_blocking(SPI_PORT, 0, result, 2);
+    return (uint16_t)(((uint16_t)result[0] << 8) | (uint16_t)result[1]);
+}
 
-bool ILI9341_T_TouchGetCoordinates(uint16_t* x, uint16_t* y) {
+bool ILI9341_T_TouchGetCoordinates(uint16_t* x, uint16_t* y)
+{
+    uint16_t raw_x[TOUCH_SAMPLES_MAX];
+    uint16_t raw_y[TOUCH_SAMPLES_MAX];
+    uint8_t nsamples = 0;
 
-    static const uint8_t cmd_read_x[] = { READ_X };
-    static const uint8_t cmd_read_y[] = { READ_Y };
-     uint8_t zeroes_tx[] = { 0x00, 0x00 };
+    if (!ILI9341_TouchPressed())
+        return false;
 
     ILI9341_TouchSelect();
 
-    uint32_t avg_x = 0;
-    uint32_t avg_y = 0;
-    uint8_t nsamples = 0;
-    for(uint8_t i = 0; i < MAX_SAMPLES; i++) {
-        if(!ILI9341_TouchPressed())
+    /*
+     * With "power down between conversions" the internal reference is switched
+     * off after every conversion, so the first conversion after chip select is
+     * made before the reference has settled. It is thrown away.
+     */
+    ILI9341_TouchReadChannel(READ_Y);
+    ILI9341_TouchReadChannel(READ_X);
+
+    for (uint8_t i = 0; i < TOUCH_SAMPLES_MAX; i++)
+    {
+        if (!ILI9341_TouchPressed())
             break;
-
+        raw_y[nsamples] = ILI9341_TouchReadChannel(READ_Y);
+        raw_x[nsamples] = ILI9341_TouchReadChannel(READ_X);
         nsamples++;
-
-        send_bytes( (uint8_t*)cmd_read_y, 1);
-        uint8_t y_raw[2] = {0, 0};
-        spi_read_blocking(SPI_PORT, 0, y_raw, 2);
-
-        send_bytes( (uint8_t*)cmd_read_x, 1);
-        uint8_t x_raw[2] = {0, 0};
-        spi_read_blocking(SPI_PORT, 0, x_raw, 2);
-
-        avg_x += (((uint16_t)x_raw[0]) << 8) | ((uint16_t)x_raw[1]);
-        avg_y += (((uint16_t)y_raw[0]) << 8) | ((uint16_t)y_raw[1]);
     }
 
     ILI9341_TouchUnselect();
 
-    if(nsamples < MAX_SAMPLES)
-        return false;
-
-    uint32_t raw_x = (avg_x / MAX_SAMPLES);
-    if(raw_x < ILI9341_TOUCH_MIN_RAW_X) raw_x = ILI9341_TOUCH_MIN_RAW_X;
-    if(raw_x > ILI9341_TOUCH_MAX_RAW_X) raw_x = ILI9341_TOUCH_MAX_RAW_X;
-
-    uint32_t raw_y = (avg_y / MAX_SAMPLES);
-    if(raw_y < ILI9341_TOUCH_MIN_RAW_X) raw_y = ILI9341_TOUCH_MIN_RAW_Y;
-    if(raw_y > ILI9341_TOUCH_MAX_RAW_Y) raw_y = ILI9341_TOUCH_MAX_RAW_Y;
-
-    *x = (raw_x - ILI9341_TOUCH_MIN_RAW_X) * ILI9341_TOUCH_SCALE_X / (ILI9341_TOUCH_MAX_RAW_X - ILI9341_TOUCH_MIN_RAW_X);
-    *y = (raw_y - ILI9341_TOUCH_MIN_RAW_Y) * ILI9341_TOUCH_SCALE_Y / (ILI9341_TOUCH_MAX_RAW_Y - ILI9341_TOUCH_MIN_RAW_Y);
-
-    if (*y > ILI9341_TOUCH_SCALE_Y)
-        *y = 0;
-    if (*x > ILI9341_TOUCH_SCALE_X)
-        *x = 0;
-    return true;
+    /*
+     * The old code required ALL samples to be taken while the panel was still
+     * pressed and threw the whole touch away otherwise, so short or slightly
+     * wobbling taps were simply lost. Whatever was sampled is used now.
+     */
+    return Touch_ComputeCoordinates(raw_x, raw_y, nsamples, x, y) ? true : false;
 }

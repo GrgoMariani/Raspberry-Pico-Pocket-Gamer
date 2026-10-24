@@ -182,38 +182,46 @@ static void G_Update(void)
 static void G_Draw(void)
 {
 	const FontDescription * f_big = &fontDescription[3];
+	const FontDescription * fm = &fontDescription[1];
     GPU_ClearFramebuffers();
+	GPU_DrawVerticalGradient(RGB(6,8,28), C_BLACK, 0, 0, GPU_X, GPU_Y);
 	// Draw Field
-	GPU_DrawEmptySquare(C_BLUE, EDGE_X, EDGE_Y, BOX_W, BOX_H);
-	GPU_DrawLine(C_RED, EDGE_X + BOX_W/2, EDGE_Y, EDGE_X + BOX_W/2, GPU_Y - EDGE_Y);
+	GPU_DrawPanel(RGB(10,14,40), C_BLUE, EDGE_X, EDGE_Y, BOX_W, BOX_H);
+	for (int16_t y = EDGE_Y+6; y < GPU_Y-EDGE_Y; y += 12)
+		GPU_DrawFilledSquare(C_RED, (int16_t)(EDGE_X + BOX_W/2 - 1), y, 2, 6);
 	// Draw Player
-	GPU_DrawFilledSquare(C_WHITE, EDGE_X-PLAYER_W/2, EDGE_Y+(memory->player_y+100)/200*BOX_H-PLAYER_H/2, PLAYER_W, PLAYER_H);
+	GPU_DrawBevelSquare(C_WHITE, (int16_t)(EDGE_X-PLAYER_W/2),
+	                    (int16_t)(EDGE_Y+(memory->player_y+100)/200*BOX_H-PLAYER_H/2), PLAYER_W, PLAYER_H);
 	// Draw Computer
-	GPU_DrawFilledSquare(C_WHITE, GPU_X-EDGE_X-PLAYER_W/2, EDGE_Y+(memory->computer_y+100)/200*BOX_H-PLAYER_H/2, PLAYER_W, PLAYER_H);
+	GPU_DrawBevelSquare(C_WHITE, (int16_t)(GPU_X-EDGE_X-PLAYER_W/2),
+	                    (int16_t)(EDGE_Y+(memory->computer_y+100)/200*BOX_H-PLAYER_H/2), PLAYER_W, PLAYER_H);
 	// Draw Ball
-	GPU_DrawFilledCircle(C_YELLOW, ((memory->ball_x+100)/200)*BOX_W+EDGE_X, ((memory->ball_y+100)/200)*BOX_H+EDGE_Y, BALL_SIZE );
+	{
+		int16_t bx = (int16_t)(((memory->ball_x+100)/200)*BOX_W+EDGE_X);
+		int16_t by = (int16_t)(((memory->ball_y+100)/200)*BOX_H+EDGE_Y);
+		GPU_DrawFilledCircle(C_YELLOW, bx, by, BALL_SIZE);
+		GPU_DrawPixel(RGB(255,255,220), (uint16_t)(bx-1), (uint16_t)(by-1));
+	}
 	// Draw Score
 	char text[32];
 	int len;
-	len = sprintf(text, "PLAYER: %d", memory->score_player);
-	GPU_DrawText(C_C1, &fontDescription[0], 0, 0, text, len);
-	len = sprintf(text, "AI: %d", memory->score_computer);
-	GPU_DrawText(C_C2, &fontDescription[0], GPU_X-len*fontDescription[0].width, 0, text, len);
+	len = sprintf(text, "PLAYER %u", memory->score_player);
+	GPU_DrawText(C_C1, fm, 4, 2, text, (uint16_t)len);
+	len = sprintf(text, "AI %u", memory->score_computer);
+	GPU_DrawText(C_C2, fm, (int16_t)(GPU_X-len*fm->width-4), 2, text, (uint16_t)len);
 
 	if (memory->pongState == PS_NOT_INITIALIZED)
 	{
-		len = sprintf(text, "PRESS KEY TO START");
-		GPU_DrawText(C_C3, f_big, GPU_X/2-len*f_big->width/2, GPU_Y/2-f_big->height/2, text, len);
+		GPU_DrawTextOutlined(C_C3, C_BLACK, f_big, GPU_X/2, (int16_t)(GPU_Y/2-f_big->height), "PRESS A KEY");
+		GPU_DrawTextCentered(C_GRAY_LIGHT, fm, GPU_X/2, (int16_t)(GPU_Y/2+10), "up/down moves, first to 11");
 	}
 	else if (memory->pongState == PS_PLAYER_SCORE)
 	{
-		len = sprintf(text, "PLAYER SCORES");
-		GPU_DrawText(C_C3, f_big, GPU_X/2-len*f_big->width/2, GPU_Y/2-f_big->height/2, text, len);
+		GPU_DrawTextOutlined(C_C3, C_BLACK, f_big, GPU_X/2, GPU_Y/2-f_big->height/2, "PLAYER SCORES");
 	}
 	else if (memory->pongState == PS_COMPUTER_SCORE)
 	{
-		len = sprintf(text, "AI SCORES");
-		GPU_DrawText(C_C3, f_big, GPU_X/2-len*f_big->width/2, GPU_Y/2-f_big->height/2, text, len);
+		GPU_DrawTextOutlined(C_C2, C_BLACK, f_big, GPU_X/2, GPU_Y/2-f_big->height/2, "AI SCORES");
 	}
 }
 

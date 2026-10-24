@@ -94,7 +94,7 @@ static inline void dc_deselect() {
     asm volatile("nop \n nop \n nop");
 }
 
-static void inline send_byte(uint8_t data)
+static inline void send_byte(uint8_t data)
 {   
     cs_select();
     dc_deselect();
@@ -102,7 +102,7 @@ static void inline send_byte(uint8_t data)
     cs_deselect();
 }
 
-static void inline send_short(uint16_t data)
+static inline void send_short(uint16_t data)
 {
     cs_select();
     dc_deselect();
@@ -116,7 +116,7 @@ static void inline send_short(uint16_t data)
     cs_deselect();
 }
 
-static void inline send_command(uint8_t command)
+static inline void send_command(uint8_t command)
 {
     dc_select();
     cs_select();

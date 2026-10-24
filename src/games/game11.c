@@ -7,32 +7,6 @@
 
 #include <string.h>
 
-typedef enum 
-{
-    P15_EMPTY,
-    P15_1,
-    P15_2,
-    P15_3,
-    P15_4,
-    P15_5,
-    P15_6,
-    P15_7,
-    P15_8,
-    P15_9,
-    P15_10,
-    P15_11,
-    P15_12,
-    P15_13,
-    P15_14,
-    P15_15
-} P15ValuesEnum;
-
-typedef struct {
-    P15ValuesEnum values[4][4];
-} Game11Memory;
-
-static Game11Memory * const memory = (Game11Memory*)(&mainMemory.sharedMemory.memblocks[0]);
-
 #define NUM_TICKS 30
 
 #define SNAKE_W 32
@@ -77,7 +51,8 @@ static void _GenerateRandomFruit()
 	r >>= 5;
 	if (!field[s->x][s->y])
 	{
-		s->dissapearTime = t+1.3*ONE_SECOND * (r&0x07);
+		/* 1.3s .. 10.4s; without the +1 every eighth fruit vanished instantly */
+		s->dissapearTime = t + (uint32_t)(1.3*ONE_SECOND) * (1 + (r&0x07));
 	}
 	else
 	{
@@ -87,22 +62,17 @@ static void _GenerateRandomFruit()
 
 static void ChangeDirection(Direction newDirection)
 {
-	if (newDirection == D_LEFT && field[head.x-1][head.y] == head.dissapearTime-1)
-	{
+	/* the cell the head came from holds head.dissapearTime-1: turning into it
+	   would mean reversing into the own body */
+	int16_t neck = (int16_t)(head.dissapearTime - 1);
+	if (newDirection == D_LEFT && head.x > 0 && field[head.x-1][head.y] == neck)
 		return;
-	}
-	if (newDirection == D_RIGHT && field[head.x+1][head.y] == head.dissapearTime-1)
-	{
+	if (newDirection == D_RIGHT && head.x+1 < SNAKE_W && field[head.x+1][head.y] == neck)
 		return;
-	}
-	if (newDirection == D_UP && field[head.x][head.y-1] == head.dissapearTime-1)
-	{
+	if (newDirection == D_UP && head.y > 0 && field[head.x][head.y-1] == neck)
 		return;
-	}
-	if (newDirection == D_DOWN && field[head.x][head.y+1] == head.dissapearTime-1)
-	{
+	if (newDirection == D_DOWN && head.y+1 < SNAKE_H && field[head.x][head.y+1] == neck)
 		return;
-	}
 	direction = newDirection;
 }
 
@@ -131,17 +101,20 @@ static void MoveSnakeOnce()
 		return;
 	}
     uint32_t t = IF_GetCurrentTime();
+	uint8_t grew = 0;
 	if (head.x == fruit1.x && head.y == fruit1.y && t<fruit1.dissapearTime)
 	{
 		head.dissapearTime++;
 		fruit1.dissapearTime = 0;
+		grew = 1;
 	}
 	if (head.x == fruit2.x && head.y == fruit2.y && t<fruit2.dissapearTime)
 	{
 		head.dissapearTime++;
 		fruit2.dissapearTime = 0;
+		grew = 1;
 	}
-	else
+	if (!grew)
 	{
 		for (uint8_t i=0; i<SNAKE_W; i++)
 			for (uint8_t j=0; j<SNAKE_H; j++)
@@ -184,12 +157,33 @@ static void G_Init(void)
 #define RESET_BUTTON_Y (S2_CENTER_Y + 30)
 
 
+#define START_X 0
+#define END_X GPU_X
+#define BLOCK_W ((END_X-START_X)/SNAKE_W)
+#define START_Y 0
+#define END_Y GPU_Y
+#define BLOCK_H ((END_Y-START_Y)/SNAKE_H)
+
+/* tap into the direction the snake should turn */
+static void TouchSteer(void)
+{
+	int32_t hx = START_X + head.x*BLOCK_W + BLOCK_W/2;
+	int32_t hy = START_Y + head.y*BLOCK_H + BLOCK_H/2;
+	int32_t dx = (int32_t)mainMemory.touch_X - hx;
+	int32_t dy = (int32_t)mainMemory.touch_Y - hy;
+	if (dx*dx + dy*dy < 64)
+		return;
+	if ((dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx))
+		ChangeDirection((dy < 0) ? D_UP : D_DOWN);
+	else
+		ChangeDirection((dx < 0) ? D_LEFT : D_RIGHT);
+}
+
 static void G_Update(void)
 {
-	// TODO: snake keyboard controls
 	if (mainMemory._gameState == GS_DONE)
 	{
-		if (mainMemory.touchPressed)
+		if (mainMemory.touchPressedNew)
 		{
 			if (mainMemory.touch_X >= RESET_BUTTON_X && mainMemory.touch_X <= RESET_BUTTON_X+RESET_BUTTON_W && mainMemory.touch_Y >= RESET_BUTTON_Y && mainMemory.touch_Y <= RESET_BUTTON_Y+RESET_BUTTON_H)
 				G_Init();
@@ -223,45 +217,68 @@ static void G_Update(void)
 				ChangeDirection(D_DOWN);
 			keyboard = KEY_NONE;
         }
+        if (mainMemory.touchPressedNew)
+        	TouchSteer();
     }
 }
 
-#define START_X 0
-#define END_X GPU_X
-#define BLOCK_W ((END_X-START_X)/SNAKE_W)
-#define START_Y 0
-#define END_Y GPU_Y
-#define BLOCK_H ((END_Y-START_Y)/SNAKE_H)
+static void DrawFruit(const SnakeObject * fruit, GPU_Color color, uint32_t t)
+{
+	if (t >= fruit->dissapearTime)
+		return;
+	int16_t cx = (int16_t)(START_X + fruit->x*BLOCK_W + BLOCK_W/2);
+	int16_t cy = (int16_t)(START_Y + fruit->y*BLOCK_H + BLOCK_H/2);
+	/* blink shortly before it disappears */
+	if (fruit->dissapearTime - t < ONE_SECOND/2 && (t/(ONE_SECOND/8)) & 1)
+		color = GPU_ShadeColor(color, 140);
+	GPU_DrawFilledCircle(color, cx, cy, (int16_t)(BLOCK_W/2-1));
+	GPU_DrawPixel(RGB(255,255,255), (uint16_t)(cx-2), (uint16_t)(cy-2));
+}
 
 static void G_Draw(void)
 {
+    const FontDescription * fm = &fontDescription[1];
+    const FontDescription * fb = &fontDescription[2];
     uint32_t t = IF_GetCurrentTime();
     GPU_ClearFramebuffers();
-    for (uint8_t i=0; i<11; i++)
-    	GPU_DrawEmptySquare(C_YELLOW, i, i, GPU_X-2*i, GPU_Y-2*i);
+    GPU_DrawVerticalGradient(RGB(6,20,10), C_BLACK, 0, 0, GPU_X, GPU_Y);
+    GPU_DrawPanel(RGB(10,30,16), C_GREEN, 6, 6, GPU_X-12, GPU_Y-12);
 
+    uint16_t length = 0;
     for (uint8_t i=0; i<SNAKE_W; i++)
 		for (uint8_t j=0; j<SNAKE_H; j++)
 		{
 			if (field[i][j])
-				GPU_DrawFilledSquare(C_WHITE, START_X+i*BLOCK_W, START_Y+j*BLOCK_H, BLOCK_W-1, BLOCK_H-1);
+			{
+				length++;
+				GPU_DrawBevelSquare(C_GREEN, (int16_t)(START_X+i*BLOCK_W+1), (int16_t)(START_Y+j*BLOCK_H+1),
+				                    (int16_t)(BLOCK_W-2), (int16_t)(BLOCK_H-2));
+			}
 		}
-    // Draw fruit1 and 2 also
-    if (t < fruit1.dissapearTime)
+    /* the head gets eyes */
     {
-    	GPU_DrawFilledSquare(C_BLUE, START_X+fruit1.x*BLOCK_W, START_Y+fruit1.y*BLOCK_H, BLOCK_W-1, BLOCK_H-1);
+        int16_t hx = (int16_t)(START_X + head.x*BLOCK_W + 1);
+        int16_t hy = (int16_t)(START_Y + head.y*BLOCK_H + 1);
+        GPU_DrawBevelSquare(C_C3, hx, hy, (int16_t)(BLOCK_W-2), (int16_t)(BLOCK_H-2));
+        GPU_DrawPixel(C_BLACK, (uint16_t)(hx+2), (uint16_t)(hy+2));
+        GPU_DrawPixel(C_BLACK, (uint16_t)(hx+BLOCK_W-4), (uint16_t)(hy+2));
     }
-    if (t < fruit2.dissapearTime)
-	{
-		GPU_DrawFilledSquare(C_RED, START_X+fruit2.x*BLOCK_W, START_Y+fruit2.y*BLOCK_H, BLOCK_W-1, BLOCK_H-1);
-	}
+    DrawFruit(&fruit1, C_BLUE, t);
+    DrawFruit(&fruit2, C_RED, t);
+
+    /* score */
+    char text[16];
+    sprintf(text, "LENGTH %u", length);
+    GPU_DrawText(C_WHITE, fm, 12, 10, text, (uint16_t)strlen(text));
+
     if (mainMemory._gameState == GS_DONE)
     {
-    	// Draw reset button
-		const char * textToDisplay = "RESET";
-		int8_t len = strlen(textToDisplay);
-		GPU_DrawFilledSquare(C_YELLOW, RESET_BUTTON_X, RESET_BUTTON_Y, RESET_BUTTON_W, RESET_BUTTON_H);
-		GPU_DrawText(C_BLACK, &fontDescription[3], RESET_BUTTON_X, RESET_BUTTON_Y, textToDisplay, len);
+    	GPU_DrawPanel(RGB(16,18,48), C_RED, (int16_t)(GPU_X/2-80), (int16_t)(GPU_Y/2-44), 160, 88);
+    	GPU_DrawTextOutlined(C_RED, C_BLACK, fb, GPU_X/2, (int16_t)(GPU_Y/2-38), "GAME OVER");
+		sprintf(text, "LENGTH %u", length);
+		GPU_DrawTextCentered(C_WHITE, fm, GPU_X/2, (int16_t)(GPU_Y/2-12), text);
+		GPU_DrawButton(C_YELLOW, C_BLACK, fb, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
+		               RESET_BUTTON_W, RESET_BUTTON_H);
     }
 }
 
