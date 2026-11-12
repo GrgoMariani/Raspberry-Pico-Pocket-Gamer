@@ -39,6 +39,21 @@ extern const Callbacks G20_Callbacks;   // Missile Defense
 extern const Callbacks G21_Callbacks;   // PacMan
 extern const Callbacks G22_Callbacks;   // Space Invaders
 extern const Callbacks G23_Callbacks;   // Turbo Drive (3d racing)
+extern const Callbacks G24_Callbacks;   // Minesweeper
+extern const Callbacks G25_Callbacks;   // Simon
+extern const Callbacks G26_Callbacks;   // Flappy Bird
+extern const Callbacks G27_Callbacks;   // Memory
+extern const Callbacks G28_Callbacks;   // Sokoban
+extern const Callbacks G29_Callbacks;   // Whack-a-mole
+extern const Callbacks G30_Callbacks;   // Doodle Jump
+extern const Callbacks G31_Callbacks;   // Solitaire
+extern const Callbacks G32_Callbacks;   // Pinball
+extern const Callbacks G33_Callbacks;   // 15 Puzzle
+extern const Callbacks G34_Callbacks;   // Flood-It
+extern const Callbacks G35_Callbacks;   // Reversi
+extern const Callbacks G36_Callbacks;   // Hangman
+extern const Callbacks G37_Callbacks;   // Bomberman
+extern const Callbacks G38_Callbacks;   // Tank Fight
 
 extern int breakGame;
 

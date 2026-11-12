@@ -39,6 +39,7 @@ typedef enum {
     F2048_2048  = 2048,
     F2048_4096  = 4096,
     F2048_8192  = 8192,
+    F2048_16384 = 16384,
 } Field2048;
 
 typedef struct {
@@ -61,13 +62,23 @@ typedef struct {
     Sprite _sprites[48];
     uint8_t _spritesNum;
     uint32_t _score;
-    uint32_t _best;
     uint8_t _won;
     uint8_t _winBanner;
     OrientationEnum _orientation;
+    uint8_t _swipeDir;          /* a swipe waiting to be played, as a KEY_* bit */
+    uint8_t _swipeTracking;
+    uint16_t _swipeStartX;
+    uint16_t _swipeStartY;
+    Field2048 _prevField[4][4]; /* one-level undo snapshot */
+    uint32_t _prevScore;
+    uint8_t _hasUndo;
 } Game9Memory;
 
 static Game9Memory * const memory = (Game9Memory*)(&mainMemory.sharedMemory.memblocks[0]);
+
+/* the record lives outside of the shared memory so that it survives a visit
+   to another game (which reuses the same memory block) */
+static uint32_t _bestScore = 0;
 
 #define NUM_TICKS 20
 
@@ -101,6 +112,7 @@ static Field2048 Increase(Field2048 fieldValue)
     case F2048_1024: return F2048_2048; break;
     case F2048_2048: return F2048_4096; break;
     case F2048_4096: return F2048_8192; break;
+    case F2048_8192: return F2048_16384; break;
     default:
         break;
     }
@@ -266,8 +278,6 @@ static void _GenerateRandomField()
 
 static void G_Init(void)
 {
-    if (memory->_score > memory->_best)
-        memory->_best = memory->_score;
     mainMemory._gameState = GS_RUNNING;
     uint32_t tick = CalculateTick();
     mainMemory._lastRenderedTick = tick;
@@ -280,6 +290,11 @@ static void G_Init(void)
     memory->_orientation = ORIENTATION_0;
     memory->_spritesNum = 0;
     memory->_score = 0;
+    memory->_swipeDir = 0;
+    memory->_swipeTracking = 0;
+    memory->_hasUndo = 0;
+    memory->_won = 0;
+    memory->_winBanner = 0;
     _GenerateRandomField();
     _GenerateRandomField();
     memory->_score = 0;   /* the two starting tiles are not scored */
@@ -300,8 +315,10 @@ static Sprite GetNextPair(uint8_t x, uint8_t y, OrientationEnum orientation)
                 savedx = i;
                 result.value = here;
             }
-            else if (result.value != here)
+            else if (result.value != here || here == F2048_16384)
             {
+                /* different values (or the biggest tile, which cannot grow
+                   any further) just slide next to each other */
                 memory->_field[savedx][y] = F2048_Empty;
                 // find the sprite
                 if (savedx != x)
@@ -321,6 +338,8 @@ static Sprite GetNextPair(uint8_t x, uint8_t y, OrientationEnum orientation)
                 result.AnimationState = ANIM_GENERATE;
                 result.value = Increase(here);
                 memory->_score += (uint32_t)result.value;
+                if (memory->_score > _bestScore)
+                    _bestScore = memory->_score;
                 if (result.value == F2048_2048 && !memory->_won)
                 {
                     memory->_won = 1;
@@ -417,18 +436,78 @@ static uint8_t BoardIsDead(void)
 #define RESET_BUTTON_X (S2_CENTER_X - RESET_BUTTON_W/2)
 #define RESET_BUTTON_Y (152)
 
+#define UNDO_BUTTON_W (5*16)
+#define UNDO_BUTTON_H (26)
+#define UNDO_BUTTON_X (S2_CENTER_X - UNDO_BUTTON_W/2)
+#define UNDO_BUTTON_Y (190)
+
+/* restore the board to before the last move and rebuild the tile sprites */
+static void Undo(void)
+{
+    if (!memory->_hasUndo)
+        return;
+    for (uint8_t i = 0; i < 4; i++)
+        for (uint8_t j = 0; j < 4; j++)
+            memory->_field[i][j] = memory->_prevField[i][j];
+    memory->_score = memory->_prevScore;
+    memory->_hasUndo = 0;
+    memory->_spritesNum = 0;
+    for (uint8_t i = 0; i < 4; i++)
+        for (uint8_t j = 0; j < 4; j++)
+            if (memory->_field[i][j] != F2048_Empty)
+            {
+                Sprite s = {{i, j, ORIENTATION_0}, {i, j, ORIENTATION_0}, 0, ANIM_LOOP, memory->_field[i][j]};
+                AddSpriteToList(s);
+            }
+    if (mainMemory._gameState == GS_DONE)
+        mainMemory._gameState = GS_RUNNING;
+}
+
+
+/* a swipe across the board is translated into the matching arrow key */
+static void TrackSwipe(void)
+{
+    if (mainMemory.touchPressedNew)
+    {
+        memory->_swipeTracking = 1;
+        memory->_swipeStartX = mainMemory.touch_X;
+        memory->_swipeStartY = mainMemory.touch_Y;
+    }
+    if (mainMemory.touchReleasedNew && memory->_swipeTracking)
+    {
+        memory->_swipeTracking = 0;
+        int32_t dx = (int32_t)mainMemory.touch_X - (int32_t)memory->_swipeStartX;
+        int32_t dy = (int32_t)mainMemory.touch_Y - (int32_t)memory->_swipeStartY;
+        int32_t ax = (dx < 0) ? -dx : dx;
+        int32_t ay = (dy < 0) ? -dy : dy;
+        if (ax < 20 && ay < 20)
+            return;                     /* a tap, not a swipe */
+        if (ax > ay)
+            memory->_swipeDir = (dx < 0) ? KEY_LEFT : KEY_RIGHT;
+        else
+            memory->_swipeDir = (dy < 0) ? KEY_UP : KEY_DOWN;
+    }
+}
 
 static void G_Update(void)
 {
+    TrackSwipe();
     const uint32_t tick = CalculateTick();
     while (mainMemory._lastRenderedTick < tick)
     {
 	    KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
-        if (keyboard != KEY_NONE && mainMemory._lastRenderedTick-memory->_lastKeyboardTick > 5 &&
+        uint8_t ready = (uint8_t)(mainMemory._lastRenderedTick-memory->_lastKeyboardTick > 5);
+        if (ready && memory->_swipeDir)
+        {
+            keyboard = (KeyPressedEnum)(keyboard | memory->_swipeDir);
+            memory->_swipeDir = 0;
+        }
+        if (keyboard != KEY_NONE && ready &&
             mainMemory._gameState == GS_RUNNING)
         {
             Field2048 before[16];
             CopyField(before);
+            uint32_t scoreBefore = memory->_score;
             if (keyboard & KEY_LEFT)
             {
                 GoLeft(ORIENTATION_0);
@@ -453,6 +532,12 @@ static void G_Update(void)
             }
             if (FieldChanged(before))
             {
+                /* keep a one-level undo snapshot of the position we left */
+                for (uint8_t i = 0; i < 4; i++)
+                    for (uint8_t j = 0; j < 4; j++)
+                        memory->_prevField[i][j] = before[i*4+j];
+                memory->_prevScore = scoreBefore;
+                memory->_hasUndo = 1;
                 _GenerateRandomField();
                 if (BoardIsDead())
                     mainMemory._gameState = GS_DONE;
@@ -467,8 +552,12 @@ static void G_Update(void)
     }
     if (mainMemory.touchPressedNew)
 	{
-		if (mainMemory.touch_X >= RESET_BUTTON_X && mainMemory.touch_X <= RESET_BUTTON_X+RESET_BUTTON_W && mainMemory.touch_Y <= RESET_BUTTON_Y+RESET_BUTTON_H)
+		if (mainMemory.touch_X >= RESET_BUTTON_X && mainMemory.touch_X <= RESET_BUTTON_X+RESET_BUTTON_W &&
+		    mainMemory.touch_Y >= RESET_BUTTON_Y && mainMemory.touch_Y <= RESET_BUTTON_Y+RESET_BUTTON_H)
 			G_Init();
+		else if (mainMemory.touch_X >= UNDO_BUTTON_X && mainMemory.touch_X <= UNDO_BUTTON_X+UNDO_BUTTON_W &&
+		    mainMemory.touch_Y >= UNDO_BUTTON_Y && mainMemory.touch_Y <= UNDO_BUTTON_Y+UNDO_BUTTON_H)
+			Undo();
 	}
 }
 
@@ -645,7 +734,7 @@ static void G_Draw(void)
     GPU_DrawTextCentered(C_GRAY_LIGHT, font_s, S2_CENTER_X, 14, "SCORE");
     sprintf(text, "%u", (unsigned)memory->_score);
     GPU_DrawTextCentered(C_WHITE, font_xl, S2_CENTER_X, 26, text);
-    sprintf(text, "BEST %u", (unsigned)(memory->_score > memory->_best ? memory->_score : memory->_best));
+    sprintf(text, "BEST %u", (unsigned)(memory->_score > _bestScore ? memory->_score : _bestScore));
     GPU_DrawTextCentered(C_YELLOW, font_s, S2_CENTER_X, 58, text);
 
     GPU_DrawPanel(RGB(20,22,44), C_GRAY_DARK, (int16_t)(GPU_X/2+6), 90, (int16_t)(GPU_X/2-12), 52);
@@ -655,6 +744,9 @@ static void G_Draw(void)
 
     GPU_DrawButton(C_YELLOW, C_BLACK, font_l, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
                    RESET_BUTTON_W, RESET_BUTTON_H);
+    if (memory->_hasUndo)
+        GPU_DrawButton(C_C1, C_WHITE, font_m, "UNDO", UNDO_BUTTON_X, UNDO_BUTTON_Y,
+                       UNDO_BUTTON_W, UNDO_BUTTON_H);
 
     if (memory->_winBanner)
     {

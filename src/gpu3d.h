@@ -120,7 +120,7 @@ void GPU3D_DrawBox(GPU_Color color, const Vec3 * center, fixed sizeX, fixed size
 /* ready made unit meshes (1x1x1, centered at the origin) */
 extern const GPU3D_Mesh GPU3D_CubeMesh;            /* flat shaded cube */
 extern const GPU3D_Mesh GPU3D_TexturedCubeMesh;    /* cube with the GPU texture on every face */
-extern const GPU3D_Mesh GPU3D_BallMesh;            /* low poly ball (octahedron) */
+extern const GPU3D_Mesh GPU3D_BallMesh;            /* low poly sphere (subdivided octahedron) */
 extern const GPU3D_Mesh GPU3D_PyramidMesh;         /* four sided pyramid */
 extern const GPU3D_Mesh GPU3D_QuadMesh;            /* 1x1 horizontal quad, facing up */
 

@@ -49,6 +49,8 @@ typedef struct {
     uint32_t _score;
     uint8_t _lives;
     uint8_t _level;
+    uint8_t _levelStartLives;   /* for the perfect-level bonus */
+    uint8_t _perfectBanner;
     QbertState _state;
     uint8_t _stateTick;
     uint8_t _fallTick;
@@ -146,6 +148,7 @@ static uint8_t AllCubesDone(void)
 static void StartLevel(uint8_t level)
 {
     memory->_level = level;
+    memory->_levelStartLives = memory->_lives;
     memory->_targetStage = (level >= 3) ? 2 : 1;
     memory->_enemyHopDelay = (level < 2) ? 14 : ((level < 4) ? 11 : 9);
     for (uint8_t i = 0; i < QB_NUM_CUBES; i++)
@@ -166,6 +169,9 @@ static void G_Init(void)
 {
     memory->_score = 0;
     memory->_lives = START_LIVES;
+    memory->_perfectBanner = 0;
+    Touch_ClearTap();
+    Keyboard_GetPressedKeys();
     StartLevel(1);
 }
 
@@ -192,12 +198,12 @@ static uint8_t DirectionFromInput(KeyPressedEnum keys, int8_t * dRow, int8_t * d
 }
 
 /* touching somewhere hops towards that point */
-static uint8_t DirectionFromTouch(int8_t * dRow, int8_t * dCol)
+static uint8_t DirectionFromTouch(uint16_t touchX, uint16_t touchY, int8_t * dRow, int8_t * dCol)
 {
     int16_t px = CubeScreenX(memory->_playerRow, memory->_playerCol);
     int16_t py = CubeScreenY(memory->_playerRow);
-    int32_t dx = (int32_t)mainMemory.touch_X - px;
-    int32_t dy = (int32_t)mainMemory.touch_Y - py;
+    int32_t dx = (int32_t)touchX - px;
+    int32_t dy = (int32_t)touchY - py;
     if (dx*dx + dy*dy < 144)
         return 0;
     if (dy < 0)
@@ -243,6 +249,12 @@ static void FinishHop(void)
     if (AllCubesDone())
     {
         memory->_score += 100*memory->_level;
+        /* finishing a level without losing a life is worth extra */
+        if (memory->_lives == memory->_levelStartLives)
+        {
+            memory->_score += 200;
+            memory->_perfectBanner = 40;
+        }
         memory->_state = QS_LEVEL_DONE;
         memory->_stateTick = 0;
     }
@@ -274,7 +286,17 @@ static void EnemyStep(void)
     int8_t newRow = (int8_t)(memory->_enemyRow + dRow);
     int8_t newCol = (int8_t)(memory->_enemyCol + dCol);
     if (!CubeValid(newRow, newCol))
+    {
+        /* Coaly hopped off the bottom of the pyramid: like in the arcade he
+           is gone and a new one spawns after a short pause (the old code left
+           him parked on the bottom row forever) */
+        if (newRow >= QB_ROWS)
+        {
+            memory->_enemyActive = 0;
+            memory->_spawnCountdown = 60;
+        }
         return;
+    }
     memory->_enemyRow = newRow;
     memory->_enemyCol = newCol;
     if (newRow == memory->_playerRow && newCol == memory->_playerCol &&
@@ -324,6 +346,8 @@ static void ResetButtonTouched(void)
 
 static void Tick(void)
 {
+    if (memory->_perfectBanner)
+        memory->_perfectBanner--;
     switch (memory->_state)
     {
     case QS_READY:
@@ -345,9 +369,11 @@ static void Tick(void)
         {
             int8_t dRow = 0, dCol = 0;
             KeyPressedEnum keys = Keyboard_GetPressedKeys();
+            uint16_t tx, ty;
+            uint8_t tap = Touch_TakeTap(&tx, &ty);
             if (DirectionFromInput(keys, &dRow, &dCol))
                 StartHop(dRow, dCol);
-            else if (mainMemory.touchPressedNew && DirectionFromTouch(&dRow, &dCol))
+            else if (tap && DirectionFromTouch(tx, ty, &dRow, &dCol))
                 StartHop(dRow, dCol);
         }
         if (memory->_enemyActive)
@@ -391,6 +417,14 @@ static void Tick(void)
 
 static void G_Update(void)
 {
+    /* the reset button is checked every main loop iteration: the press edge
+       of a touch only lives for one iteration and must not be missed between
+       two logic ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     /* a long pause must not fast forward the whole game at once */
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
@@ -399,10 +433,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -423,6 +454,12 @@ static void ProjectToScreen(const Vec3 * world, int16_t * sx, int16_t * sy)
 static void DrawQbert(const Vec3 * body, uint8_t squashed)
 {
     fixed size = squashed ? FX(0.30) : FX(0.36);
+    if (!squashed)
+    {
+        int16_t gx, gy;
+        ProjectToScreen(body, &gx, &gy);
+        GPU_DrawGlow(C_ORANGE, gx, gy, 12);
+    }
     GPU3D_DrawBox(C_ORANGE, body, size, size, size, 0, 0, 0, 0);
     if (!squashed)
     {
@@ -565,6 +602,8 @@ static void G_Draw(void)
         GPU_DrawButton(C_YELLOW, C_BLACK, fb, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
                        RESET_BUTTON_W, RESET_BUTTON_H);
     }
+    if (memory->_perfectBanner)
+        GPU_DrawTextOutlined(C_YELLOW, C_BLACK, fm, GPU_X/2, 52, "PERFECT +200");
 }
 
 static void G_Deinit(void)

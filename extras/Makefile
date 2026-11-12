@@ -11,7 +11,10 @@ GAME_SOURCES_C := interface.c ../src/menu.c ../src/games/tictactoe.c ../src/game
 	../src/games/game07.c ../src/games/game08.c ../src/games/game09.c ../src/games/game10.c ../src/games/game11.c ../src/games/game12.c \
 	../src/games/game13.c ../src/games/game14.c ../src/games/game15.c ../src/games/game16.c ../src/games/game17.c \
 	../src/games/game18.c ../src/games/game19.c ../src/games/game20.c ../src/games/game21.c ../src/games/game22.c \
-	../src/games/game23.c
+	../src/games/game23.c ../src/games/game24.c ../src/games/game25.c ../src/games/game26.c ../src/games/game27.c \
+	../src/games/game28.c ../src/games/game29.c ../src/games/game30.c ../src/games/game31.c ../src/games/game32.c \
+	../src/games/game33.c ../src/games/game34.c ../src/games/game35.c ../src/games/game36.c \
+	../src/games/game37.c ../src/games/game38.c
 
 olcPixelGameEngine.h:
 	git clone https://github.com/OneLoneCoder/olcPixelGameEngine.git

@@ -94,6 +94,30 @@ void GPU_DrawVerticalGradient(GPU_Color top, GPU_Color bottom, int16_t x, int16_
 void GPU_DrawFilledTriangle(GPU_Color color, int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2);
 void GPU_DrawButton(GPU_Color color, GPU_Color textColor, const FontDescription * font, const char * text, int16_t x, int16_t y, int16_t width, int16_t height);
 
+/* --- cheap, targeted visual effects (safe for the RP2040 frame budget) --- */
+/* A deterministic starfield: `count` stars derived from `seed`, twinkling with
+   `time` (microseconds). Only a few dozen pixels, so it is very cheap. */
+void GPU_DrawStarfield(uint32_t seed, uint8_t count, uint32_t time);
+/* same, but confined to a w×h region (e.g. only the sky above a ground line) */
+void GPU_DrawStarfieldIn(uint32_t seed, uint8_t count, uint32_t time, int16_t w, int16_t h);
+/* A soft radial glow made of a few concentric shaded discs. Draw it BEFORE the
+   bright core object. Small radii only. */
+void GPU_DrawGlow(GPU_Color color, int16_t x, int16_t y, int16_t radius);
+/* A shaded ball: dark rim on the lower right, lit body and a specular highlight
+   on the upper left, so it reads as a sphere instead of a flat disc. Costs a
+   handful of filled circles, so it is a drop-in replacement for the flat
+   circles the games used to draw their balls with. */
+void GPU_DrawBall(GPU_Color color, int16_t x, int16_t y, int16_t radius);
+/* A 1-bit bitmap sprite (MSB = leftmost column, like the fonts). `scale` is an
+   integer pixel multiplier (>=1). */
+void GPU_DrawSprite(const uint16_t * rows, uint8_t width, uint8_t height,
+                    int16_t x, int16_t y, GPU_Color color, uint8_t scale);
+/* A stateless expanding explosion: 8 sparks flying outwards over `maxT` ticks,
+   fading as `t` approaches `maxT`. Nothing is drawn once t >= maxT. */
+void GPU_DrawBurst(int16_t x, int16_t y, uint8_t t, uint8_t maxT, GPU_Color color);
+/* A framed HUD progress bar, frac256 in 0..256. */
+void GPU_DrawProgressBar(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t frac256, GPU_Color color);
+
 /*
  * Polygon rasterizer used by the 3d renderer (and available to the games).
  * The polygons have to be convex, u/v are Q8 texture coordinates into the

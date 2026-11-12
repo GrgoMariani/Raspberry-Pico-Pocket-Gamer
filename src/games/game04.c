@@ -29,9 +29,16 @@ typedef struct {
     uint32_t _guessesCorrect;
     uint32_t _guessesTotal;
     uint8_t is_touch_held;
-    uint8_t _flash;
+    uint32_t _flashUntil;     /* feedback stays visible until this time */
     uint8_t _flashAnswer;
+    uint8_t _cursor;          /* keyboard cursor over the 4x4 keypad */
+    uint8_t _lastAnswer;      /* the answer of the previous sum, shown on a miss */
+    uint16_t _streak;
+    uint32_t _score;
+    uint32_t _questionStart;  /* when the current sum appeared, for the speed bonus */
 } Game4Memory;
+
+#define QUESTION_TIME (10*ONE_SECOND)
 
 static Game4Memory * const memory = (Game4Memory*)(&mainMemory.sharedMemory.memblocks[0]);
 
@@ -116,6 +123,7 @@ static void GenerateNewAnswer()
         GenerateMultiplication(memory->_answer);
         break;
     }
+    memory->_questionStart = IF_GetCurrentTime();
 }
 
 static void G_Init(void)
@@ -124,7 +132,10 @@ static void G_Init(void)
     memory->_guessesCorrect = 0;
     memory->_guessesTotal = 0;
     memory->is_touch_held = 0;
-    memory->_flash = 0;
+    memory->_flashUntil = 0;
+    memory->_cursor = 0;
+    memory->_streak = 0;
+    memory->_score = 0;
     GenerateNewAnswer();
     mainMemory._gameState = GS_RUNNING;
 }
@@ -135,25 +146,46 @@ static void G_Init(void)
 
 static void Answer(uint8_t answer)
 {
+    memory->_lastAnswer = memory->_answer;
     if (answer == memory->_answer)
     {
         memory->_lastGuess = GR_CORRECT;
         memory->_guessesCorrect++;
+        if (memory->_streak < 999)
+            memory->_streak++;
+        /* base points + streak bonus + a bonus for answering quickly */
+        uint32_t elapsed = IF_GetCurrentTime() - memory->_questionStart;
+        uint32_t speed = (elapsed < QUESTION_TIME) ? (QUESTION_TIME - elapsed)/ONE_SECOND : 0;
+        memory->_score += 10 + (uint32_t)memory->_streak*2 + speed;
     }
     else
     {
         memory->_lastGuess = GR_WRONG;
+        memory->_streak = 0;
     }
     memory->_guessesTotal++;
-    memory->_flash = 8;
+    memory->_flashUntil = IF_GetCurrentTime() + ONE_SECOND;
     memory->_flashAnswer = answer;
     GenerateNewAnswer();
 }
 
 static void G_Update(void)
 {
-    if (memory->_flash)
-        memory->_flash--;
+    /* switches: arrows move a cursor over the keypad, UP+DOWN together answers */
+    KeyPressedEnum keys = Keyboard_GetPressedKeys();
+    uint8_t cx = (uint8_t)(memory->_cursor % 4), cy = (uint8_t)(memory->_cursor / 4);
+    if ((keys & KEY_UP) && (keys & KEY_DOWN))
+    {
+        Answer(memory->_cursor);
+    }
+    else
+    {
+        if (keys & KEY_LEFT)  cx = (uint8_t)((cx + 3) % 4);
+        if (keys & KEY_RIGHT) cx = (uint8_t)((cx + 1) % 4);
+        if (keys & KEY_UP)    cy = (uint8_t)((cy + 3) % 4);
+        if (keys & KEY_DOWN)  cy = (uint8_t)((cy + 1) % 4);
+        memory->_cursor = (uint8_t)(cy*4 + cx);
+    }
     if (mainMemory.touchPressedNew)
     {
         if (mainMemory.touch_X >= GPU_X/2 && mainMemory.touch_X < GPU_X &&
@@ -162,7 +194,10 @@ static void G_Update(void)
             uint8_t x = (uint8_t)((mainMemory.touch_X - GPU_X/2)/BOX_W);
             uint8_t y = (uint8_t)(mainMemory.touch_Y/BOX_H);
             if (x < 4 && y < 4)
+            {
+                memory->_cursor = (uint8_t)(4*y + x);
                 Answer((uint8_t)(4*y + x));
+            }
         }
     }
 }
@@ -177,6 +212,7 @@ static void G_Draw(void)
     GPU_DrawVerticalGradient(RGB(10,14,40), C_BLACK, 0, 0, GPU_X/2, GPU_Y);
     char buffer[16];
     uint8_t ll;
+    uint8_t flashing = (uint8_t)((int32_t)(IF_GetCurrentTime() - memory->_flashUntil) < 0);
 
     /* the sum */
     GPU_DrawPanel(RGB(16,20,56), C_C1, 8, 8, (int16_t)(GPU_X/2-16), 150);
@@ -200,36 +236,56 @@ static void G_Draw(void)
     }
 
     /* feedback */
-    if (memory->_flash)
+    if (flashing)
     {
         if (memory->_lastGuess == GR_CORRECT)
-            GPU_DrawTextCentered(C_C3, f_big, GPU_X/4, 176, "CORRECT!");
+        {
+            if (memory->_streak >= 2)
+            {
+                sprintf(buffer, "CORRECT x%u", (unsigned)memory->_streak);
+                GPU_DrawTextCentered(C_C3, f_big, GPU_X/4, 176, buffer);
+            }
+            else
+                GPU_DrawTextCentered(C_C3, f_big, GPU_X/4, 176, "CORRECT!");
+        }
         else
-            GPU_DrawTextCentered(C_RED, f_big, GPU_X/4, 176, "WRONG!");
+        {
+            GPU_DrawTextCentered(C_RED, f_big, GPU_X/4, 170, "WRONG!");
+            /* show the right answer so the game stays a learning tool */
+            sprintf(buffer, "it was %u", (unsigned)memory->_lastAnswer);
+            GPU_DrawTextCentered(C_GRAY_LIGHT, f, GPU_X/4, 188, buffer);
+        }
     }
 
     /* score */
     {
         GPU_DrawPanel(RGB(16,20,56), C_GRAY_DARK, 8, 200, (int16_t)(GPU_X/2-16), 32);
-        ll = (uint8_t)sprintf(buffer, "%u/%u", (unsigned)memory->_guessesCorrect, (unsigned)memory->_guessesTotal);
-        GPU_DrawText(C_WHITE, f, 14, 206, buffer, ll);
+        ll = (uint8_t)sprintf(buffer, "SCORE %u", (unsigned)memory->_score);
+        GPU_DrawText(C_WHITE, f, 14, 204, buffer, ll);
         if (memory->_guessesTotal)
         {
             ll = (uint8_t)sprintf(buffer, "%u%%", (unsigned)(memory->_guessesCorrect*100/memory->_guessesTotal));
-            GPU_DrawText(C_YELLOW, f, 90, 206, buffer, ll);
+            GPU_DrawText(C_YELLOW, f, (int16_t)(GPU_X/2-14-ll*f->width), 204, buffer, ll);
         }
+        /* countdown bar: answer before it runs out for a speed bonus */
+        uint32_t elapsed = IF_GetCurrentTime() - memory->_questionStart;
+        uint16_t frac = (elapsed < QUESTION_TIME) ? (uint16_t)(256 - elapsed*256/QUESTION_TIME) : 0;
+        GPU_DrawProgressBar(14, 218, (int16_t)(GPU_X/2-28), 8, frac, frac > 80 ? C_C3 : C_ORANGE);
     }
 
     /* the keypad */
-    const char nums[16] = "0123456789ABCDEF";
+    const char nums[] = "0123456789ABCDEF";
     for (uint8_t i=0; i<4; i++)
 		for (uint8_t j=0; j<4; j++)
 		{
 			uint8_t value = (uint8_t)(4*j+i);
-			GPU_Color key = (memory->_flash && value == memory->_flashAnswer)
+			GPU_Color key = (flashing && value == memory->_flashAnswer)
 			                ? ((memory->_lastGuess == GR_CORRECT) ? C_C3 : C_RED) : C_WHITE;
 			GPU_DrawBevelSquare(key, (int16_t)(GPU_X/2+i*BOX_W+2), (int16_t)(j*BOX_H+2),
 			                    (int16_t)(BOX_W-4), (int16_t)(BOX_H-4));
+			if (value == memory->_cursor)
+				GPU_DrawEmptySquare(C_YELLOW, (int16_t)(GPU_X/2+i*BOX_W+2), (int16_t)(j*BOX_H+2),
+				                    (int16_t)(BOX_W-5), (int16_t)(BOX_H-5));
 			char label[2] = { nums[value], 0 };
 			if (value < 10)
 			{

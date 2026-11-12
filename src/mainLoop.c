@@ -16,6 +16,8 @@ void SetupCallbacks(const Callbacks * callbacksNew)
     // Clear the pressed/released keys buffer
     Keyboard_GetPressedKeys();
     Keyboard_ClearReleases();
+    // a tap that started the new program must not leak into it
+    Touch_ClearTap();
     // a switch of the running program always disarms the double press detection
     _menuPressArmed = 0;
     // Maybe a previous game needs to clear the heap

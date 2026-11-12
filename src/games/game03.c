@@ -18,7 +18,13 @@ typedef struct {
     LO_Light _lights[5][5];
     unsigned int _stepsCount;
 	uint8_t is_touch_pressed;
+	uint32_t _startTime;
+	uint8_t _cursorX, _cursorY;   /* keyboard cursor */
 } Game3Memory;
+
+/* the record lives outside of the shared memory so that it survives a visit
+   to another game (which reuses the same memory block) */
+static unsigned int _bestSteps = 0;   /* fewest steps of a solved board, 0 = none yet */
 
 
 static Game3Memory * const memory = (Game3Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -85,6 +91,11 @@ static void G_Init(void)
 	} while (IsGameFinished());
 	memory->_stepsCount = 0;
 	memory->is_touch_pressed = 0;
+	memory->_cursorX = 2;
+	memory->_cursorY = 2;
+	memory->_startTime = IF_GetCurrentTime();
+	Keyboard_GetPressedKeys();
+	Touch_ClearTap();
 }
 
 #define START_X (0)
@@ -103,10 +114,27 @@ static void G_Update(void)
 {
 	if (IsGameFinished())
 	{
+		if (mainMemory._gameState == GS_RUNNING)
+		{
+			/* remember the best solve of this session */
+			if (_bestSteps == 0 || memory->_stepsCount < _bestSteps)
+				_bestSteps = memory->_stepsCount;
+		}
 		mainMemory._gameState = GS_DONE;
 	}
 	else if (mainMemory._gameState == GS_RUNNING)
 	{
+		/* switches: arrows move a cursor, UP+DOWN together toggles a lamp */
+		KeyPressedEnum keys = Keyboard_GetPressedKeys();
+		if ((keys & KEY_UP) && (keys & KEY_DOWN))
+			TogglePosition(memory->_cursorX, memory->_cursorY);
+		else
+		{
+			if (keys & KEY_LEFT)  memory->_cursorX = (uint8_t)((memory->_cursorX + 4) % 5);
+			if (keys & KEY_RIGHT) memory->_cursorX = (uint8_t)((memory->_cursorX + 1) % 5);
+			if (keys & KEY_UP)    memory->_cursorY = (uint8_t)((memory->_cursorY + 4) % 5);
+			if (keys & KEY_DOWN)  memory->_cursorY = (uint8_t)((memory->_cursorY + 1) % 5);
+		}
 		if (mainMemory.touchPressedNew)
 		{
 			if (mainMemory.touch_X <= END_X && mainMemory.touch_Y <= END_Y)
@@ -114,7 +142,11 @@ static void G_Update(void)
 				uint8_t x = (uint8_t)(mainMemory.touch_X / BOX_WIDTH);
 				uint8_t y = (uint8_t)(mainMemory.touch_Y / BOX_WIDTH);
 				if (x < 5 && y < 5)
+				{
+					memory->_cursorX = x;
+					memory->_cursorY = y;
 					TogglePosition(x, y);
+				}
 			}
 		}
 	}
@@ -139,9 +171,8 @@ static void DrawLamp(int16_t x, int16_t y, int16_t size, uint8_t on, uint8_t fla
 	int16_t r = (int16_t)(size/2 - 3);
 	if (on)
 	{
-		GPU_DrawFilledCircle(flash ? C_WHITE : C_YELLOW, cx, cy, r);
-		GPU_DrawFilledCircle(RGB(255,255,200), (int16_t)(cx - r/3), (int16_t)(cy - r/3), (int16_t)(r/3));
-		GPU_DrawEmptyCircle(GPU_ShadeColor(C_YELLOW, 150), cx, cy, r);
+		GPU_DrawGlow(C_YELLOW, cx, cy, (int16_t)(r+4));
+		GPU_DrawBall(flash ? C_WHITE : C_YELLOW, cx, cy, r);
 	}
 	else
 	{
@@ -170,24 +201,40 @@ static void G_Draw(void)
 					lights_on++;
 				DrawLamp((int16_t)(START_X + i*BOX_WIDTH + 2), (int16_t)(START_Y + j*BOX_WIDTH + 2),
 				         (int16_t)(BOX_WIDTH - 4), (uint8_t)(memory->_lights[i][j] == LO_ON), 0);
+				if (memory->_cursorX == i && memory->_cursorY == j)
+					GPU_DrawEmptySquare(C_YELLOW, (int16_t)(START_X + i*BOX_WIDTH + 1),
+					                    (int16_t)(START_Y + j*BOX_WIDTH + 1), (int16_t)(BOX_WIDTH-2), (int16_t)(BOX_WIDTH-2));
 			}
 		}
-		GPU_DrawPanel(RGB(16,16,48), C_GRAY_DARK, (int16_t)(GPU_X-S2_W+6), 8, (int16_t)(S2_W-12), 96);
+		GPU_DrawPanel(RGB(16,16,48), C_GRAY_DARK, (int16_t)(GPU_X-S2_W+6), 8, (int16_t)(S2_W-12), 140);
 		GPU_DrawTextCentered(C_YELLOW, f, CENTER_S2_X, 16, "STEPS");
-		char number[8];
+		char number[12];
 		sprintf(number, "%u", memory->_stepsCount);
 		GPU_DrawTextCentered(C_WHITE, f_med, CENTER_S2_X, 30, number);
 		GPU_DrawTextCentered(C_YELLOW, f, CENTER_S2_X, 62, "LIGHTS ON");
 		sprintf(number, "%u", lights_on);
 		GPU_DrawTextCentered(C_WHITE, f_med, CENTER_S2_X, 74, number);
+		GPU_DrawTextCentered(C_GRAY_MEDIUM, f, CENTER_S2_X, 100, "BEST");
+		if (_bestSteps)
+			sprintf(number, "%u", _bestSteps);
+		else
+			sprintf(number, "-");
+		GPU_DrawTextCentered(C_GRAY_LIGHT, f, CENTER_S2_X, 112, number);
+		sprintf(number, "TIME %u", (unsigned)((IF_GetCurrentTime()-memory->_startTime)/ONE_SECOND));
+		GPU_DrawTextCentered(C_GRAY_MEDIUM, f, CENTER_S2_X, 132, number);
 	}
 	else
 	{
 		uint32_t nowTime = IF_GetCurrentTime();
 		GPU_DrawTextCentered(C_C3, f_big, CENTER_S2_X, 20, "WELL DONE");
-		char number[8];
+		char number[16];
 		sprintf(number, "%u steps", memory->_stepsCount);
 		GPU_DrawTextCentered(C_YELLOW, f, CENTER_S2_X, 60, number);
+		if (_bestSteps)
+		{
+			sprintf(number, "best %u", _bestSteps);
+			GPU_DrawTextCentered(C_GRAY_LIGHT, f, CENTER_S2_X, 76, number);
+		}
 		for(uint8_t i=0; i<5; i++)
 		{
 			for(uint8_t j=0; j<5; j++)

@@ -24,14 +24,33 @@ typedef enum {
 	REFLECT_SIN = 2
 } ReflectEnum;
 
+/* one of up to three balls in play (the multiball power-up adds two) */
+typedef struct {
+	float x, y;
+	float sin, cos;
+	uint8_t active;
+} Ball;
+
+/* falling power-up released by a destroyed brick */
+typedef struct {
+	float x, y;
+	uint8_t type;      /* 0 wide paddle, 1 slow ball, 2 points, 3 multiball, 4 life */
+	uint8_t active;
+} PowerUp;
+
 typedef struct {
 	float player_x;
-	float ball_x;
-	float ball_y;
-	float ball_sin;
-	float ball_cos;
+	Ball balls[3];
+	float ballSpeedMul;      /* the balls get faster with every block hit */
+	uint32_t score;
+	uint8_t lives;           /* player lives: losing all balls costs one */
+	uint8_t level;           /* cleared boards advance to a harder level */
+	uint16_t levelFlash;     /* ticks of the "LEVEL n" popup */
 	BreakoutState breakoutState;
 	Block blocks[6][4];
+	PowerUp drops[3];
+	uint16_t wideTimer;      /* ticks of wide paddle remaining */
+	uint16_t slowTimer;      /* ticks of slow ball remaining */
 } Game14Memory;
 
 static Game14Memory * const memory = (Game14Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -43,20 +62,35 @@ static uint32_t CalculateTick()
     return IF_GetCurrentTime()/(ONE_SECOND/NUM_TICKS);
 }
 
-static int InitiateBall()
+/* serves upwards, but never flatter than ~27 degrees so that the ball cannot
+   end up bouncing between the side walls forever */
+static void ServeBall(Ball * ball)
 {
-	memory->ball_x = 0.0f;
-	memory->ball_y = 100.0f;
-	memory->ball_sin = 0.0f;
-	memory->ball_cos = 1.0f;
-	uint32_t seed = IF_Random();
-	memory->ball_sin = sin(seed);
-	memory->ball_cos = cos(seed);
-	if (memory->ball_cos == 1.0f)
-		return 1;
-	if (memory->ball_sin > 0)
-		memory->ball_sin *= -1.0f;
-	return 0;
+	ball->x = 0.0f;
+	ball->y = 100.0f;
+	int32_t up = 45 + (int32_t)Random_Range(51);      /* 0.45 .. 0.95 */
+	ball->sin = -(float)up/100.0f;
+	ball->cos = sqrtf(1.0f - ball->sin*ball->sin);
+	if (Random_Range(2))
+		ball->cos = -ball->cos;
+	ball->active = 1;
+}
+
+static void InitiateBalls()
+{
+	for (uint8_t b = 0; b < 3; b++)
+		memory->balls[b].active = 0;
+	ServeBall(&memory->balls[0]);
+}
+
+/* the brick wall of a level: early levels are soft, later ones bring bricks
+   with up to four lives in a diagonal pattern */
+static void BuildBlocks()
+{
+	uint8_t spread = memory->level < 4 ? memory->level : 4;
+	for (uint8_t i = 0; i < 6; i++)
+		for (uint8_t j = 0; j < 4; j++)
+			memory->blocks[i][j].lives = (uint8_t)(1 + (i + 2*j + memory->level - 1) % spread);
 }
 
 static void G_Init(void)
@@ -64,13 +98,20 @@ static void G_Init(void)
     mainMemory._gameState = GS_RUNNING;
 	memory->breakoutState = BS_NOT_INITIALIZED;
 	memory->player_x = 0.0f;
+	memory->ballSpeedMul = 1.0f;
+	memory->score = 0;
+	memory->lives = 3;
+	memory->level = 1;
+	memory->levelFlash = 0;
+	memory->wideTimer = 0;
+	memory->slowTimer = 0;
+	for (uint8_t d = 0; d < 3; d++)
+		memory->drops[d].active = 0;
 	mainMemory._lastRenderedTick = CalculateTick();
-	while (InitiateBall());
-	for (uint8_t i=0; i<6; i++)
-		for (uint8_t j=0; j<4; j++)
-		{
-			memory->blocks[i][j].lives = 4;
-		}
+	Keyboard_GetPressedKeys();
+	Touch_ClearTap();
+	InitiateBalls();
+	BuildBlocks();
 }
 
 #define EDGE_X (40)
@@ -97,45 +138,54 @@ static void G_Init(void)
 #define BLOCK_W (BLOCK_V_W/200.0f*BOX_W)
 #define BLOCK_H (BLOCK_V_H/200.0f*BOX_H)
 
-
-static uint8_t CheckWallCollisions()
+/* current paddle half-width (wider while the power-up is active) */
+static float PaddleHalf(void)
 {
-	if (memory->ball_x < -100.0f)
+	return memory->wideTimer ? PLAYER_V_W*0.75f : PLAYER_V_W/2;
+}
+
+/* returns 1 when the ball fell out of the field (it is deactivated then) */
+static uint8_t CheckWallCollisions(Ball * ball)
+{
+	if (ball->x < -100.0f)
 	{
-		memory->ball_x = -100.0f;
-		memory->ball_cos *= -1.0f;
+		ball->x = -100.0f;
+		ball->cos *= -1.0f;
 	}
-	else if (memory->ball_x > 100.0f)
+	else if (ball->x > 100.0f)
 	{
-		memory->ball_x = 100.0f;
-		memory->ball_cos *= -1.0f;
+		ball->x = 100.0f;
+		ball->cos *= -1.0f;
 	}
-	if (memory->ball_y < -100.0f)
+	if (ball->y < -100.0f)
 	{
-		memory->ball_y = -100.0f;
-		memory->ball_sin *= -1.0f;
+		ball->y = -100.0f;
+		ball->sin *= -1.0f;
 	}
-	else if (memory->ball_y > 100.0f)
+	else if (ball->y > 100.0f)
 	{
-		if (memory->player_x-PLAYER_V_W/2<memory->ball_x && memory->player_x+PLAYER_V_W/2 > memory->ball_x)
+		float half = PaddleHalf();
+		if (memory->player_x-half<ball->x && memory->player_x+half > ball->x)
 		{
-			float diff = (memory->ball_x-memory->player_x)/((PLAYER_V_W+0.1)/2);
-			memory->ball_cos = diff;
-			memory->ball_sin = -sqrt(1-diff*diff);
+			float diff = (ball->x-memory->player_x)/(half+0.05f);
+			ball->cos = diff;
+			ball->sin = -sqrt(1-diff*diff);
+			/* back onto the paddle so the contact is only evaluated once */
+			ball->y = 100.0f;
 		}
-		else
+		else if (ball->y > 106.0f)
 		{
-			memory->breakoutState = BS_GAME_OVER;
+			ball->active = 0;
 			return 1;
 		}
 	}
 	return 0;
 }
 
-static uint8_t _intersects(float rect_x, float rect_y)
+static uint8_t _intersects(const Ball * ball, float rect_x, float rect_y)
 {
-    float circleDistancex = memory->ball_x - rect_x;
-    float circleDistancey = memory->ball_y - rect_y;
+    float circleDistancex = ball->x - rect_x;
+    float circleDistancey = ball->y - rect_y;
 	circleDistancex = circleDistancex > 0 ? circleDistancex : -circleDistancex;
 	circleDistancey = circleDistancey > 0 ? circleDistancey : -circleDistancey;
 
@@ -145,16 +195,26 @@ static uint8_t _intersects(float rect_x, float rect_y)
     if (circleDistancex <= (BLOCK_V_W/2)) { return REFLECT_SIN; } 
     if (circleDistancey <= (BLOCK_V_H/2)) { return REFLECT_COS; }
 
-    float cornerDistance_sq = pow(circleDistancex - BLOCK_V_W/2, 2) +
-                         pow(circleDistancey - BLOCK_V_H/2, 2);
+    float cornerDistance_sq = (circleDistancex - BLOCK_V_W/2)*(circleDistancex - BLOCK_V_W/2) +
+                              (circleDistancey - BLOCK_V_H/2)*(circleDistancey - BLOCK_V_H/2);
 
-	if (cornerDistance_sq <= pow(BALL_SIZE, 2))
+	if (cornerDistance_sq <= BALL_SIZE*BALL_SIZE)
 		return REFLECT_COS | REFLECT_SIN;
 	return 0;
 }
 
+/* weighted draw: the extra life stays rare, multiball is the fun middle */
+static uint8_t DrawPowerUpType(void)
+{
+	uint32_t r = Random_Range(12);
+	if (r < 3) return 0;        /* wide   3/12 */
+	if (r < 6) return 1;        /* slow   3/12 */
+	if (r < 9) return 2;        /* points 3/12 */
+	if (r < 11) return 3;       /* multi  2/12 */
+	return 4;                   /* life   1/12 */
+}
 
-static int CheckBlockCollisions()
+static int CheckBlockCollisions(Ball * ball)
 {
 	uint8_t intersects_block;
 	float x, y;
@@ -165,38 +225,128 @@ static int CheckBlockCollisions()
 				continue;
 			x = -100.0f+BLOCK_V_EDGE_X + BLOCK_V_W/2 + i*(BLOCK_V_W + BLOCK_V_SEPARATOR_W);
 			y = -100.0f+BLOCK_V_EDGE_Y + BLOCK_V_H/2 + j*(BLOCK_V_H + BLOCK_V_SEPARATOR_H);
-			intersects_block = _intersects(x, y);
+			intersects_block = _intersects(ball, x, y);
 			if (intersects_block)
 			{
 				memory->blocks[i][j].lives--;
+				memory->score += 10;
+				if (!memory->blocks[i][j].lives)
+				{
+					memory->score += 25;
+					/* a destroyed brick may release a power-up */
+					if (Random_Range(4) == 0)
+					{
+						for (uint8_t d = 0; d < 3; d++)
+							if (!memory->drops[d].active)
+							{
+								memory->drops[d].active = 1;
+								memory->drops[d].x = x;
+								memory->drops[d].y = y;
+								memory->drops[d].type = DrawPowerUpType();
+								break;
+							}
+					}
+				}
+				if (memory->ballSpeedMul < 1.6f)
+					memory->ballSpeedMul += 0.02f;
 				if (intersects_block & REFLECT_COS)
-					memory->ball_cos *= -1.0f;
+					ball->cos *= -1.0f;
 				if (intersects_block & REFLECT_SIN)
-					memory->ball_sin *= -1.0f;
+					ball->sin *= -1.0f;
 				return 1;
 			}
 		}
 	return 0;
 }
 
-static int CheckGameWon()
+/* all bricks gone: advance to the next level instead of ending the game */
+static void CheckLevelCleared()
 {
 	for (uint8_t i=0; i<6; i++)
 		for (uint8_t j=0; j<4; j++)
-		{
 			if (memory->blocks[i][j].lives)
-			{
-				return 0;
-			}
-		}
-	memory->breakoutState = BS_GAME_WON;
-	return 1;
+				return;
+	memory->score += 250;
+	if (memory->level < 99)
+		memory->level++;
+	memory->levelFlash = 40;
+	/* the pace carries over a little into the next level */
+	memory->ballSpeedMul = 1.0f + 0.08f*(memory->level-1);
+	if (memory->ballSpeedMul > 1.5f)
+		memory->ballSpeedMul = 1.5f;
+	memory->wideTimer = 0;
+	memory->slowTimer = 0;
+	for (uint8_t d = 0; d < 3; d++)
+		memory->drops[d].active = 0;
+	BuildBlocks();
+	InitiateBalls();
 }
 
-static void MoveBall()
+static void MoveBall(Ball * ball)
 {
-	memory->ball_x += memory->ball_cos*BALL_SPEED;
-	memory->ball_y += memory->ball_sin*BALL_SPEED;
+	float mul = memory->ballSpeedMul;
+	if (memory->slowTimer)
+		mul *= 0.65f;
+	ball->x += ball->cos*BALL_SPEED*mul;
+	ball->y += ball->sin*BALL_SPEED*mul;
+}
+
+/* multiball: clone the first live ball twice, fanned out by +/- 22 degrees */
+static void SpawnMultiball(void)
+{
+	Ball * src = 0;
+	for (uint8_t b = 0; b < 3; b++)
+		if (memory->balls[b].active) { src = &memory->balls[b]; break; }
+	if (!src)
+		return;
+	const float ca = 0.927f, sa = 0.375f;   /* cos/sin of ~22 degrees */
+	uint8_t clone = 0;
+	for (uint8_t b = 0; b < 3; b++)
+	{
+		Ball * dst = &memory->balls[b];
+		if (dst->active)
+			continue;
+		dst->x = src->x;
+		dst->y = src->y;
+		/* fan the clones out to opposite sides, no matter which ball is the
+		   source (the old sign depended on the slot index, so two clones could
+		   fly in the same direction) */
+		float sign = (clone++ == 0) ? 1.0f : -1.0f;
+		dst->cos = src->cos*ca - src->sin*sa*sign;
+		dst->sin = src->sin*ca + src->cos*sa*sign;
+		dst->active = 1;
+	}
+}
+
+/* power-ups fall towards the paddle; catching one applies its effect */
+static void UpdatePowerUps()
+{
+	if (memory->wideTimer) memory->wideTimer--;
+	if (memory->slowTimer) memory->slowTimer--;
+	for (uint8_t d = 0; d < 3; d++)
+	{
+		PowerUp * p = &memory->drops[d];
+		if (!p->active)
+			continue;
+		p->y += 1.6f;
+		/* caught by the paddle? */
+		if (p->y > 96.0f && p->y < 104.0f)
+		{
+			float half = PaddleHalf();
+			if (p->x > memory->player_x-half && p->x < memory->player_x+half)
+			{
+				p->active = 0;
+				if (p->type == 0) memory->wideTimer = 200;
+				else if (p->type == 1) memory->slowTimer = 160;
+				else if (p->type == 2) memory->score += 100;
+				else if (p->type == 3) SpawnMultiball();
+				else if (p->type == 4 && memory->lives < 5) memory->lives++;
+				continue;
+			}
+		}
+		if (p->y > 110.0f)
+			p->active = 0;
+	}
 }
 
 static void G_Update(void)
@@ -207,6 +357,16 @@ static void G_Update(void)
 	{
 		if (memory->breakoutState == BS_PLAYING)
 		{
+			if (memory->levelFlash)
+				memory->levelFlash--;
+			/* dragging a finger moves the paddle */
+			if (mainMemory.touchPressed)
+			{
+				float x = ((float)mainMemory.touch_X - EDGE_X)/BOX_W*200.0f - 100.0f;
+				if (x < -(100.0f-PLAYER_V_W/2)) x = -(100.0f-PLAYER_V_W/2);
+				if (x > (100.0f-PLAYER_V_W/2)) x = (100.0f-PLAYER_V_W/2);
+				memory->player_x = x;
+			}
 			if (keyboard_held & KEY_LEFT)
 			{
 				memory->player_x -= PLAYER_SPEED;
@@ -219,15 +379,50 @@ static void G_Update(void)
 				if (memory->player_x > (100.0f-PLAYER_V_W/2))
 					memory->player_x = (100.0f-PLAYER_V_W/2);
 			}
-			MoveBall();
-			CheckWallCollisions();
-			CheckBlockCollisions();
-			CheckGameWon();
+			uint8_t anyAlive = 0;
+			for (uint8_t b = 0; b < 3; b++)
+			{
+				Ball * ball = &memory->balls[b];
+				if (!ball->active)
+					continue;
+				MoveBall(ball);
+				if (!CheckWallCollisions(ball))
+				{
+					CheckBlockCollisions(ball);
+					anyAlive = 1;
+				}
+			}
+			if (!anyAlive)
+			{
+				/* every ball lost costs a life; the game ends at zero */
+				if (memory->lives)
+					memory->lives--;
+				if (memory->lives == 0)
+				{
+					memory->breakoutState = BS_GAME_OVER;
+				}
+				else
+				{
+					InitiateBalls();
+					memory->wideTimer = 0;
+					memory->slowTimer = 0;
+				}
+			}
+			else
+			{
+				CheckLevelCleared();
+			}
+			UpdatePowerUps();
 		}
-		else if (keyboard_held & (KEY_LEFT | KEY_RIGHT))
+		else
 		{
-			G_Init();
-			memory->breakoutState = BS_PLAYING;
+			uint16_t tx, ty;
+			uint8_t tap = Touch_TakeTap(&tx, &ty);
+			if (Keyboard_GetPressedKeys() != KEY_NONE || tap)
+			{
+				G_Init();
+				memory->breakoutState = BS_PLAYING;
+			}
 		}
 		// Update state
 		mainMemory._lastRenderedTick++;
@@ -243,9 +438,12 @@ static void G_Draw(void)
 	// Draw Field
 	GPU_DrawPanel(RGB(14,10,40), C_C2, EDGE_X, EDGE_Y, BOX_W, BOX_H);
 	// Draw Player
-	GPU_DrawBevelSquare(C_C1, (int16_t)(EDGE_X+(memory->player_x+100.0f)/200.0f*BOX_W-PLAYER_W/2), (int16_t)(GPU_Y-EDGE_Y-PLAYER_H/2), (int16_t)PLAYER_W, PLAYER_H);
+	{
+		float pw = (PaddleHalf()*2)/200.0f*BOX_W;
+		GPU_Color pc = memory->wideTimer ? C_C3 : C_C1;
+		GPU_DrawBevelSquare(pc, (int16_t)(EDGE_X+(memory->player_x+100.0f)/200.0f*BOX_W-pw/2), (int16_t)(GPU_Y-EDGE_Y-PLAYER_H/2), (int16_t)pw, PLAYER_H);
+	}
 	// Draw Blocks
-	
 	for (uint8_t i=0; i<6; i++)
 		for (uint8_t j=0; j<4; j++)
 		{
@@ -267,22 +465,51 @@ static void G_Draw(void)
 				GPU_DrawBevelSquare(color, (int16_t)(EDGE_X + (BLOCK_V_EDGE_X+(BLOCK_V_W+BLOCK_V_SEPARATOR_W)*i)/200.0f*BOX_W), (int16_t)(EDGE_Y+(BLOCK_V_EDGE_Y+(BLOCK_V_H+BLOCK_V_SEPARATOR_H)*j)/200.0f*BOX_H), (int16_t)BLOCK_W, (int16_t)BLOCK_H);
 			}
 		}
-	// Draw Ball
+	// Draw Balls
+	for (uint8_t b = 0; b < 3; b++)
 	{
-		int16_t bx = (int16_t)(EDGE_X + (memory->ball_x+100.0f)/200.0f*BOX_W);
-		int16_t by = (int16_t)(EDGE_Y + (memory->ball_y+100.0f)/200.0f*BOX_H);
-		GPU_DrawFilledCircle(C_C3, bx, by, (int16_t)BALL_SIZE);
-		GPU_DrawPixel(RGB(255,255,255), (uint16_t)(bx-1), (uint16_t)(by-1));
+		Ball * ball = &memory->balls[b];
+		if (!ball->active)
+			continue;
+		int16_t bx = (int16_t)(EDGE_X + (ball->x+100.0f)/200.0f*BOX_W);
+		int16_t by = (int16_t)(EDGE_Y + (ball->y+100.0f)/200.0f*BOX_H);
+		GPU_DrawGlow(C_C3, bx, by, (int16_t)(BALL_SIZE+4));
+		GPU_DrawBall(C_C3, bx, by, (int16_t)BALL_SIZE);
 	}
-	// blocks left
+	// Draw falling power-ups
 	{
-		uint8_t left = 0;
-		for (uint8_t i=0; i<6; i++)
-			for (uint8_t j=0; j<4; j++)
-				left = (uint8_t)(left + memory->blocks[i][j].lives);
-		char hud[16];
-		int hlen = sprintf(hud, "BLOCKS %u", left);
+		const FontDescription * fs = &fontDescription[0];
+		for (uint8_t d = 0; d < 3; d++)
+		{
+			PowerUp * p = &memory->drops[d];
+			if (!p->active)
+				continue;
+			int16_t px = (int16_t)(EDGE_X + (p->x+100.0f)/200.0f*BOX_W);
+			int16_t py = (int16_t)(EDGE_Y + (p->y+100.0f)/200.0f*BOX_H);
+			GPU_Color c = (p->type == 0) ? C_C3 : (p->type == 1) ? C_CYAN :
+			              (p->type == 2) ? C_YELLOW : (p->type == 3) ? C_MAGENTA : C_RED;
+			const char * label = (p->type == 0) ? "W" : (p->type == 1) ? "S" :
+			                     (p->type == 2) ? "+" : (p->type == 3) ? "M" : "L";
+			GPU_DrawGlow(c, px, py, 7);
+			GPU_DrawBevelSquare(c, (int16_t)(px-6), (int16_t)(py-6), 12, 12);
+			GPU_DrawTextCentered(C_BLACK, fs, px, (int16_t)(py-4), label);
+		}
+	}
+	// score, level and lives
+	{
+		char hud[32];
+		int hlen = sprintf(hud, "LEVEL %u", memory->level);
 		GPU_DrawText(C_GRAY_LIGHT, fm, 4, 4, hud, (uint16_t)hlen);
+		hlen = sprintf(hud, "SCORE %u", (unsigned)memory->score);
+		GPU_DrawText(C_YELLOW, fm, (int16_t)(GPU_X - 4 - hlen*fm->width), 4, hud, (uint16_t)hlen);
+		for (uint8_t i = 0; i < memory->lives && i < 5; i++)
+			GPU_DrawBall(C_C1, (int16_t)(GPU_X/2 - 28 + i*14), 9, 4);
+	}
+	if (memory->levelFlash && memory->breakoutState == BS_PLAYING)
+	{
+		char text[16];
+		sprintf(text, "LEVEL %u", memory->level);
+		GPU_DrawTextOutlined(C_C3, C_BLACK, f_big, GPU_X/2, (int16_t)(GPU_Y/2-30), text);
 	}
 	// Draw Text
 	if (memory->breakoutState != BS_PLAYING)
@@ -301,6 +528,14 @@ static void G_Draw(void)
 				break;
 		}
 		GPU_DrawTextOutlined(C_GREEN, C_BLACK, f_big, GPU_X/2, (int16_t)(GPU_Y/2-f_big->height/2), text);
+		if (memory->breakoutState == BS_NOT_INITIALIZED)
+			GPU_DrawTextCentered(C_GRAY_MEDIUM, fm, GPU_X/2, (int16_t)(GPU_Y/2+12), "or touch, drag moves the paddle");
+		if (memory->breakoutState == BS_GAME_OVER)
+		{
+			char text2[32];
+			sprintf(text2, "SCORE %u  LEVEL %u", (unsigned)memory->score, memory->level);
+			GPU_DrawTextCentered(C_WHITE, fm, GPU_X/2, (int16_t)(GPU_Y/2+14), text2);
+		}
 	}
 }
 

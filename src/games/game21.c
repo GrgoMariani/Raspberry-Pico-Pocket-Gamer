@@ -54,10 +54,16 @@ typedef struct {
     uint8_t _level;
     uint32_t _score;
     uint16_t _dotsLeft;
+    uint32_t _nextBonus;     /* extra life every 10000 points */
     uint8_t _state;      /* 0 ready, 1 playing, 2 dying, 3 over */
     uint8_t _stateTick;
     uint8_t _mouth;
+    uint16_t _fruitTimer;    /* ticks until the bonus fruit appears */
+    uint16_t _fruitLife;     /* ticks the fruit stays, 0 = not present */
 } Game21Memory;
+
+#define FRUIT_X 9
+#define FRUIT_Y 11
 
 static Game21Memory * const memory = (Game21Memory*)(&mainMemory.sharedMemory.memblocks[0]);
 
@@ -124,7 +130,9 @@ static void PlaceActors(void)
     memory->_pacDir = DIR_LEFT;
     memory->_pacWant = DIR_LEFT;
     static const uint8_t gx[NUM_GHOSTS] = { 9, 8, 10, 9 };
-    static const uint8_t gy[NUM_GHOSTS] = { 7, 7, 7, 6 };
+    /* all four start on the open corridor row: row 6 column 9 is a wall, the
+       fourth ghost used to sit inside it until its release timer ran out */
+    static const uint8_t gy[NUM_GHOSTS] = { 7, 7, 7, 7 };
     for (uint8_t i = 0; i < NUM_GHOSTS; i++)
     {
         memory->_ghosts[i].x = (float)gx[i];
@@ -163,6 +171,8 @@ static void StartLevel(uint8_t level)
     PlaceActors();
     memory->_state = 0;
     memory->_stateTick = 0;
+    memory->_fruitTimer = 350;
+    memory->_fruitLife = 0;
     mainMemory._gameState = GS_RUNNING;
     mainMemory._lastRenderedTick = CalculateTick();
 }
@@ -172,6 +182,9 @@ static void G_Init(void)
     memset(memory, 0, sizeof(Game21Memory));
     memory->_lives = START_LIVES;
     memory->_score = 0;
+    memory->_nextBonus = 10000;
+    Touch_ClearTap();
+    Keyboard_GetPressedKeys();
     StartLevel(1);
 }
 
@@ -309,18 +322,22 @@ static void Tick(void)
         if (keys & KEY_LEFT)  memory->_pacWant = DIR_LEFT;
         if (keys & KEY_UP)    memory->_pacWant = DIR_UP;
         if (keys & KEY_DOWN)  memory->_pacWant = DIR_DOWN;
-        if (mainMemory.touchPressedNew)
         {
-            int16_t px = (int16_t)(MAZE_OX + memory->_pacX*CELL + CELL/2);
-            int16_t py = (int16_t)(MAZE_OY + memory->_pacY*CELL + CELL/2);
-            int32_t dx = (int32_t)mainMemory.touch_X - px;
-            int32_t dy = (int32_t)mainMemory.touch_Y - py;
-            if (dx*dx + dy*dy > 36)
+            /* the tap latch delivers the press even between two logic ticks */
+            uint16_t tx, ty;
+            if (Touch_TakeTap(&tx, &ty))
             {
-                if ((dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx))
-                    memory->_pacWant = (dy < 0) ? DIR_UP : DIR_DOWN;
-                else
-                    memory->_pacWant = (dx < 0) ? DIR_LEFT : DIR_RIGHT;
+                int16_t px = (int16_t)(MAZE_OX + memory->_pacX*CELL + CELL/2);
+                int16_t py = (int16_t)(MAZE_OY + memory->_pacY*CELL + CELL/2);
+                int32_t dx = (int32_t)tx - px;
+                int32_t dy = (int32_t)ty - py;
+                if (dx*dx + dy*dy > 36)
+                {
+                    if ((dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx))
+                        memory->_pacWant = (dy < 0) ? DIR_UP : DIR_DOWN;
+                    else
+                        memory->_pacWant = (dx < 0) ? DIR_LEFT : DIR_RIGHT;
+                }
             }
         }
 
@@ -351,6 +368,23 @@ static void Tick(void)
                 StartLevel((uint8_t)(memory->_level + 1));
                 return;
             }
+        }
+        /* bonus fruit: appears after a while, stays for a limited time */
+        if (memory->_fruitLife)
+        {
+            memory->_fruitLife--;
+            if (pcx == FRUIT_X && pcy == FRUIT_Y)
+            {
+                memory->_score += 100 * memory->_level;
+                memory->_fruitLife = 0;
+                memory->_fruitTimer = 500;
+            }
+        }
+        else if (memory->_fruitTimer)
+        {
+            memory->_fruitTimer--;
+            if (memory->_fruitTimer == 0)
+                memory->_fruitLife = 250;
         }
         if (memory->_frightLeft)
             memory->_frightLeft--;
@@ -395,6 +429,13 @@ static void Tick(void)
                 }
             }
         }
+        /* the classic extra life every 10000 points */
+        if (memory->_score >= memory->_nextBonus)
+        {
+            if (memory->_lives < 4)
+                memory->_lives++;
+            memory->_nextBonus += 10000;
+        }
         break;
     }
     case 2:
@@ -435,6 +476,13 @@ static void ResetButtonTouched(void)
 
 static void G_Update(void)
 {
+    /* check the reset button every main loop iteration, a touch press edge
+       only lives for one iteration and would be missed between two ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
         mainMemory._lastRenderedTick = tick - 4*NUM_TICKS;
@@ -442,10 +490,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -488,6 +533,7 @@ static void DrawDots(void)
             int16_t py = (int16_t)(MAZE_OY + y*CELL + CELL/2);
             if (MazeCell(x, y) == 'o')
             {
+                GPU_DrawGlow(C_YELLOW, px, py, 8);
                 if (t & 1)
                     GPU_DrawFilledCircle(C_YELLOW, px, py, 5);
                 else
@@ -498,6 +544,25 @@ static void DrawDots(void)
                 GPU_DrawFilledSquare(RGB(255,220,170), (int16_t)(px-1), (int16_t)(py-1), 3, 3);
             }
         }
+}
+
+/* the bonus fruit: a pair of cherries */
+static void DrawFruit(void)
+{
+    if (!memory->_fruitLife)
+        return;
+    /* blink shortly before it disappears */
+    if (memory->_fruitLife < 60 && (memory->_fruitLife & 4))
+        return;
+    int16_t px = (int16_t)(MAZE_OX + FRUIT_X*CELL + CELL/2);
+    int16_t py = (int16_t)(MAZE_OY + FRUIT_Y*CELL + CELL/2);
+    GPU_DrawGlow(C_RED, px, py, 8);
+    GPU_DrawLine(C_GREEN, px, (int16_t)(py-6), (int16_t)(px-3), (int16_t)(py-1));
+    GPU_DrawLine(C_GREEN, px, (int16_t)(py-6), (int16_t)(px+3), (int16_t)(py-1));
+    GPU_DrawFilledCircle(C_RED, (int16_t)(px-3), (int16_t)(py+1), 3);
+    GPU_DrawFilledCircle(C_RED, (int16_t)(px+3), (int16_t)(py+1), 3);
+    GPU_DrawPixel(C_WHITE, (uint16_t)(px-4), (uint16_t)py);
+    GPU_DrawPixel(C_WHITE, (uint16_t)(px+2), (uint16_t)py);
 }
 
 static void DrawPac(void)
@@ -566,6 +631,7 @@ static void G_Draw(void)
 
     DrawMaze();
     DrawDots();
+    DrawFruit();
     for (uint8_t i = 0; i < NUM_GHOSTS; i++)
         DrawGhost(&memory->_ghosts[i], i);
     DrawPac();

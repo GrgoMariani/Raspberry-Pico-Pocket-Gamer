@@ -101,6 +101,26 @@ KeyPressedEnum Keyboard_GetHeldKeys()
 /* the finger has to move further than this before the filter snaps to it */
 #define TOUCH_SNAP_DISTANCE 10
 
+/* the tap latch, see gameshared.h */
+static uint8_t _tapPending = 0;
+static uint16_t _tapX = 0;
+static uint16_t _tapY = 0;
+
+uint8_t Touch_TakeTap(uint16_t * x, uint16_t * y)
+{
+	if (!_tapPending)
+		return 0;
+	_tapPending = 0;
+	if (x) *x = _tapX;
+	if (y) *y = _tapY;
+	return 1;
+}
+
+void Touch_ClearTap(void)
+{
+	_tapPending = 0;
+}
+
 void Touch_Update(uint8_t pressed, uint16_t x, uint16_t y)
 {
 	mainMemory.touchReleasedNew = (mainMemory.touchPressed && !pressed) ? 1 : 0;
@@ -113,6 +133,10 @@ void Touch_Update(uint8_t pressed, uint16_t x, uint16_t y)
 		// a new touch has to land exactly where the finger is
 		mainMemory.touch_X = x;
 		mainMemory.touch_Y = y;
+		// keep the press for the games that only look at their own tick
+		_tapPending = 1;
+		_tapX = x;
+		_tapY = y;
 		return;
 	}
 	// low pass filter against jitter, but never lag behind a real movement

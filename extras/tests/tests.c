@@ -360,6 +360,63 @@ static void test_line_clipping(void)
     CHECK(1, "circles at the border survived");
 }
 
+/* A radius-0 circle used to underflow the Bresenham y counter and smear a
+   bowtie-shaped artifact across the screen (seen in Missile Defense). It must
+   paint exactly one pixel. */
+static void test_circle_radius_zero(void)
+{
+    BEGIN_TEST("circle radius zero does not smear");
+    GPU_ClearFramebuffers();
+    GPU_DrawFilledCircle(C_WHITE, 160, 120, 0);
+    uint32_t n = countNonBlack();
+    CHECK(n == 1, "radius-0 filled circle painted %u pixels (expected 1)", n);
+    GPU_ClearFramebuffers();
+    GPU_DrawEmptyCircle(C_WHITE, 160, 120, 0);
+    n = countNonBlack();
+    CHECK(n == 1, "radius-0 empty circle painted %u pixels (expected 1)", n);
+    GPU_ClearFramebuffers();
+    GPU_DrawFilledCircle(C_WHITE, 160, 120, 1);
+    n = countNonBlack();
+    CHECK(n <= 9, "radius-1 filled circle painted %u pixels", n);
+}
+
+/* Regression: the filled circle used to seed a VERTICAL line and never emit
+   the middle row, leaving a one pixel horizontal gap through the centre of
+   every ball, lamp and Connect4 hole. Every row of the disc must be solid. */
+static void test_circle_fill_solid(void)
+{
+    BEGIN_TEST("filled circle has no centre gap");
+    const int16_t cx = 60, cy = 60;
+    for (int r = 1; r <= 24; r++)
+    {
+        GPU_ClearFramebuffers();
+        GPU_DrawFilledCircle(C_WHITE, cx, cy, (int16_t)r);
+        flush();
+        int bad = 0;
+        for (int dy = -r; dy <= r; dy++)
+        {
+            int lo = 1000, hi = -1000;
+            for (int dx = -r-1; dx <= r+1; dx++)
+            {
+                if (GetPixel((uint16_t)(cx+dx), (uint16_t)(cy+dy)) != 0)
+                {
+                    if (dx < lo) lo = dx;
+                    if (dx > hi) hi = dx;
+                }
+            }
+            if (hi < lo) { bad = 1; break; }             /* row missing entirely */
+            if (lo != -hi) { bad = 1; break; }           /* not symmetric */
+            for (int dx = lo; dx <= hi; dx++)
+                if (GetPixel((uint16_t)(cx+dx), (uint16_t)(cy+dy)) == 0)
+                    { bad = 1; break; }                  /* hole inside the row */
+            if (bad) break;
+            if (dy == 0 && hi != r) { bad = 1; break; }  /* middle row too short */
+        }
+        CHECK(!bad, "filled circle r=%d has a gap or a short middle row", r);
+    }
+    GPU_ClearFramebuffers();
+}
+
 static void test_touch_mapping(void)
 {
     BEGIN_TEST("touch coordinate mapping");
@@ -867,6 +924,21 @@ static const GameEntry allGames[] = {
     { "pacman",      &G21_Callbacks },
     { "invaders",    &G22_Callbacks },
     { "turbodrive",  &G23_Callbacks },
+    { "minesweeper", &G24_Callbacks },
+    { "simon",       &G25_Callbacks },
+    { "flappy",      &G26_Callbacks },
+    { "memory",      &G27_Callbacks },
+    { "sokoban",     &G28_Callbacks },
+    { "whackamole",  &G29_Callbacks },
+    { "doodlejump",  &G30_Callbacks },
+    { "solitaire",   &G31_Callbacks },
+    { "pinball",     &G32_Callbacks },
+    { "puzzle15",    &G33_Callbacks },
+    { "floodit",     &G34_Callbacks },
+    { "reversi",     &G35_Callbacks },
+    { "hangman",     &G36_Callbacks },
+    { "bomberman",   &G37_Callbacks },
+    { "tankfight",   &G38_Callbacks },
 };
 
 static const GameEntry * findGame(const char * name)
@@ -977,6 +1049,235 @@ static void test_game_specifics(void)
     setTouch(0, 0, 0);
 }
 
+/* ---------------------------------------------------- regression tests */
+
+/* The tap latch must deliver a press to a game that only looks once per logic
+   tick, even when the press edge happened many main loop iterations earlier. */
+static void test_touch_tap_latch(void)
+{
+    BEGIN_TEST("touch tap latch");
+    uint16_t x = 0, y = 0;
+    Touch_ClearTap();
+    CHECK(Touch_TakeTap(&x, &y) == 0, "tap latch not empty after clear");
+
+    /* a press edge, then several iterations with the finger held still */
+    Touch_Update(1, 123, 77);
+    for (int i = 0; i < 5; i++) Touch_Update(1, 123, 77);
+    CHECK(mainMemory.touchPressedNew == 0, "press edge should be gone by now");
+    CHECK(Touch_TakeTap(&x, &y) == 1, "latched tap was lost");
+    CHECK(x == 123 && y == 77, "lapped tap position %d,%d", x, y);
+    CHECK(Touch_TakeTap(&x, &y) == 0, "tap delivered twice");
+
+    /* a second press is latched again */
+    Touch_Update(0, 123, 77);
+    Touch_Update(1, 200, 150);
+    CHECK(Touch_TakeTap(&x, &y) == 1 && x == 200 && y == 150, "second tap wrong");
+
+    /* switching programs must drop a pending tap so it cannot leak into the
+       next game (e.g. the tap that launched it from the menu) */
+    Touch_Update(0, 0, 0);
+    Touch_Update(1, 10, 10);
+    SetupCallbacks(&MM_Callbacks);
+    CHECK(Touch_TakeTap(&x, &y) == 0, "tap leaked across SetupCallbacks");
+    setTouch(0, 0, 0);
+}
+
+/* Tapping a calculator key: the keypad occupies the left half of the screen. */
+static void calcTap(int keyIndex)
+{
+    uint16_t x = (uint16_t)((keyIndex % 4) * 40 + 20);
+    uint16_t y = (uint16_t)((keyIndex / 4) * 60 + 30);
+    setTouch(1, x, y);
+    stepFrame();
+    setTouch(0, 0, 0);
+    stepFrame();
+}
+
+/* Building a huge product used to overflow the signed long long before the
+   result was clamped (undefined behaviour). Under UBSan the old code aborts. */
+static void test_calculator_overflow(void)
+{
+    BEGIN_TEST("calculator big product");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(20000000);
+    Random_Seed(5);
+    SetupCallbacks(&G12_Callbacks);
+    for (int i = 0; i < 3; i++) stepFrame();
+    /* 99999999 * 99999999 = (clamped to 999999999999) */
+    for (int i = 0; i < 8; i++) calcTap(10);   /* 9 */
+    calcTap(11);                               /* * */
+    for (int i = 0; i < 8; i++) calcTap(10);   /* 9 */
+    calcTap(15);                               /* = */
+    /* now previous_result is at the clamp; multiplying it by 99999999 again
+       would overflow a long long if it were not guarded */
+    calcTap(11);                               /* * */
+    for (int i = 0; i < 8; i++) calcTap(10);   /* 9 */
+    calcTap(15);                               /* = */
+    CHECK(countNonBlack() > 100, "calculator stopped drawing after big product");
+    /* typing a digit after = starts a fresh calculation, it must not crash */
+    calcTap(1);                                /* 2 */
+    /* the C button lives under the display now */
+    setTouch(1, 178, 135); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    CHECK(countNonBlack() > 100, "calculator stopped drawing after clear");
+    setTouch(0, 0, 0);
+}
+
+/* The scientific page: sqrt(9) must produce 3, decimals must work. The value
+   is verified by comparing the history tape pixels against the same string
+   rendered with the same font on the same row (the background is a gradient). */
+static void test_calculator_scientific(void)
+{
+    BEGIN_TEST("calculator scientific page");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(25000000);
+    Random_Seed(5);
+    SetupCallbacks(&G12_Callbacks);
+    for (int i = 0; i < 3; i++) stepFrame();
+    calcTap(10);                               /* 9 */
+    /* SCI button */
+    setTouch(1, 226, 135); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    calcTap(0);                                /* sqrt -> operand becomes 3 */
+    calcTap(15);                               /* BAS: back to the basic page */
+    calcTap(15);                               /* = */
+    /* history tape now shows "= 3" at (176,158); render the reference string
+       at a scratch spot and compare the two pixel blocks */
+    GPU_DrawText(C_GRAY_MEDIUM, &fontDescription[0], 250, 158, "= 3", 3);
+    flush();
+    int same = 1;
+    for (uint16_t dy = 0; dy < 8; dy++)
+        for (uint16_t dx = 0; dx < 18; dx++)
+            if (GetPixel(176+dx, 158+dy) != GetPixel(250+dx, 158+dy))
+                same = 0;
+    CHECK(same, "sqrt(9) did not produce 3 on the history tape");
+
+    /* decimal arithmetic: 1.5 + 1.5 = 3 */
+    setTouch(1, 178, 135); stepFrame(); setTouch(0, 0, 0); stepFrame();  /* C */
+    calcTap(0);                                /* 1 */
+    calcTap(12);                               /* . */
+    calcTap(5);                                /* 5 */
+    calcTap(3);                                /* + */
+    calcTap(0);                                /* 1 */
+    calcTap(12);                               /* . */
+    calcTap(5);                                /* 5 */
+    calcTap(15);                               /* = */
+    GPU_DrawText(C_GRAY_MEDIUM, &fontDescription[0], 250, 158, "= 3", 3);
+    flush();
+    same = 1;
+    for (uint16_t dy = 0; dy < 8; dy++)
+        for (uint16_t dx = 0; dx < 18; dx++)
+            if (GetPixel(176+dx, 158+dy) != GetPixel(250+dx, 158+dy))
+                same = 0;
+    CHECK(same, "1.5 + 1.5 did not produce 3 on the history tape");
+
+    /* division by zero shows ERROR and recovers on C */
+    setTouch(1, 178, 135); stepFrame(); setTouch(0, 0, 0); stepFrame();  /* C */
+    calcTap(5);                                /* 5 */
+    calcTap(14);                               /* / */
+    calcTap(13);                               /* 0 */
+    calcTap(15);                               /* = -> ERROR */
+    CHECK(countNonBlack() > 100, "calculator stopped drawing after division by zero");
+    setTouch(1, 178, 135); stepFrame(); setTouch(0, 0, 0); stepFrame();  /* C */
+    calcTap(1);                                /* 2 works again */
+    CHECK(countNonBlack() > 100, "calculator did not recover from ERROR");
+    setTouch(0, 0, 0);
+}
+
+/* The 2048 reset button used to react to any touch in its column above the
+   button (the lower y bound was missing), wiping the board by accident. */
+static void test_2048_reset_bounds(void)
+{
+    BEGIN_TEST("2048 reset button bounds");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(30000000);
+    Random_Seed(11);
+    SetupCallbacks(&G9_Callbacks);
+    for (int i = 0; i < 40; i++) stepFrame();   /* let the spawn animation settle */
+    uint32_t before = frameHash();
+    /* touch well above the reset button but inside its x range: must NOT reset */
+    setTouch(1, 240, 100);
+    stepFrame();
+    setTouch(0, 0, 0);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(frameHash() == before, "touch above the reset button wiped the board");
+    /* a touch on the button itself still resets (board changes) */
+    setTouch(1, 240, 165);
+    stepFrame();
+    setTouch(0, 0, 0);
+    for (int i = 0; i < 40; i++) stepFrame();
+    CHECK(frameHash() != before, "touch on the reset button did not reset");
+    setTouch(0, 0, 0);
+}
+
+/* the four games added in the graphics/gameplay pass */
+static void test_new_games(void)
+{
+    BEGIN_TEST("new games");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(40000000);
+
+    /* Minesweeper: the very first tap must never detonate a mine */
+    Random_Seed(24);
+    SetupCallbacks(&G24_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    setTouch(1, 160, 130);
+    stepFrame();
+    setTouch(0, 0, 0);
+    for (int i = 0; i < 10; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "minesweeper first tap hit a mine");
+    CHECK(countNonBlack() > 1000, "minesweeper did not reveal anything");
+
+    /* Memory: flipping two cards changes the board */
+    Random_Seed(27);
+    SetupCallbacks(&G27_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    uint32_t before = frameHash();
+    setTouch(1, 82, 52); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    setTouch(1, 134, 52); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(frameHash() != before, "memory did not react to flipping cards");
+
+    /* Flappy: a tap starts the run and the bird stays alive for a while */
+    Random_Seed(26);
+    SetupCallbacks(&G26_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    setTouch(1, 160, 120); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(countNonBlack() > 1000, "flappy did not draw the scene");
+
+    /* Simon: it plays a pattern and waits for input without crashing */
+    Random_Seed(25);
+    SetupCallbacks(&G25_Callbacks);
+    for (int i = 0; i < 120; i++) stepFrame();
+    CHECK(countNonBlack() > 1000, "simon did not draw the pads");
+
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Regression: explosions used to oscillate at their peak radius forever, so
+   they never cleared and the wave-completion check (which waits for all booms
+   to expire) never fired - no wave 2. With no input every missile lands and
+   the cities are eventually lost, which can only happen once booms expire. */
+static void test_missile_defense_waves(void)
+{
+    BEGIN_TEST("missile defense explosions expire / waves advance");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(50000000);
+    Random_Seed(20);
+    SetupCallbacks(&G20_Callbacks);
+    int done = 0;
+    for (int i = 0; i < 6000; i++)
+    {
+        stepFrame();
+        if (mainMemory._gameState == GS_DONE) { done = 1; break; }
+    }
+    CHECK(done, "missile defense never finished a wave (explosions stuck)");
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
 static void test_menu(void)
 {
     BEGIN_TEST("main menu");
@@ -989,8 +1290,9 @@ static void test_menu(void)
     flush();
     CHECK(GetPixel(5, 5) != 0, "no highlight bar on the first entry");
 
-    /* scrolling down moves the highlight and wraps around at the end */
-    for (int i = 0; i < 30; i++)
+    /* scrolling down moves the highlight away from the first entry (a small
+       fixed count so the check does not depend on the total number of games) */
+    for (int i = 0; i < 5; i++)
         tapKey(KEY_DOWN);
     flush();
     CHECK(GetPixel(5, 5) == 0, "the highlight did not move away from the top");
@@ -1024,8 +1326,335 @@ static void test_menu(void)
         for (uint16_t y = 40; y < 200; y++)
             if (GetPixel(x, y) != 0) lit++;
     CHECK(lit > 2000, "the cube area has only %u lit pixels", lit);
+
+    /* the last entry of the list is Tank Fight: UP from the top wraps to it and
+       RIGHT has to launch it */
+    SetupCallbacks(&MM_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    tapKey(KEY_UP);
+    tapKey(KEY_RIGHT);
+    CHECK(_callbacks.initCallback == G38_Callbacks.initCallback,
+          "the last menu entry did not launch tank fight");
     setKeys(KEY_NONE);
     setTouch(0, 0, 0);
+}
+
+/* Regression: Memory used to run its logic once per main loop iteration, so
+   the mismatched pair flipped back after 22 iterations - a few milliseconds
+   on the console. The pair must stay visible for about a second now. */
+static void test_memory_mismatch_timing(void)
+{
+    BEGIN_TEST("memory mismatch stays visible");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(60000000);
+    /* hash of the board area only (no HUD, no clock) */
+    #define MEM_HASH() ({ uint32_t h = 2166136261u; flush(); \
+        for (uint16_t y = 26; y < 234; y++) \
+            for (uint16_t x = 56; x < 264; x++) { h ^= GetPixel(x, y); h *= 16777619u; } \
+        h; })
+    int verified = 0;
+    for (int attempt = 0; attempt < 8 && !verified; attempt++)
+    {
+        Random_Seed(27 + attempt);
+        SetupCallbacks(&G27_Callbacks);
+        for (int i = 0; i < 5; i++) stepFrame();
+        /* flip cell 0 and cell (attempt+1) */
+        setTouch(1, 82, 52); stepFrame(); setTouch(0, 0, 0); stepFrame();
+        uint16_t x2 = (uint16_t)(56 + ((attempt+1)%4)*52 + 26);
+        uint16_t y2 = (uint16_t)(26 + ((attempt+1)/4)*52 + 26);
+        setTouch(1, x2, y2); stepFrame(); setTouch(0, 0, 0); stepFrame();
+        /* after ~0.85 s the two cards must still be face up */
+        for (int i = 0; i < 23; i++) stepFrame();
+        uint32_t upHash = MEM_HASH();
+        /* after ~2.5 s a mismatched pair is down again (a matched pair stays) */
+        for (int i = 0; i < 50; i++) stepFrame();
+        uint32_t laterHash = MEM_HASH();
+        if (upHash != laterHash)
+            verified = 1;      /* found a mismatch: it was up at 0.85 s, down later */
+    }
+    CHECK(verified, "mismatched pair was not visible at 0.85 s (or never flipped back)");
+    #undef MEM_HASH
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* The ship has to start at the BOTTOM of the tunnel so that LEFT/RIGHT steer
+   in the direction the player sees (the old top spawn felt mirrored). */
+static void test_tunnel_ship_position(void)
+{
+    BEGIN_TEST("tunnel rush ship starts at the bottom");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(70000000);
+    Random_Seed(19);
+    SetupCallbacks(&G19_Callbacks);
+    for (int i = 0; i < 10; i++) stepFrame();   /* still in the READY pause, no roll */
+    flush();
+    uint32_t bottom = 0, top = 0;
+    for (uint16_t x = 120; x < 200; x++)
+    {
+        for (uint16_t y = 150; y < 210; y++)
+            if (GetPixel(x, y) != 0) bottom++;
+        for (uint16_t y = 30; y < 90; y++)
+            if (GetPixel(x, y) != 0) top++;
+    }
+    CHECK(bottom > top, "ship is not at the bottom of the tunnel (%u vs %u)", bottom, top);
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Solitaire: deal, draw from the stock, undo the draw, auto-finish */
+static void test_solitaire(void)
+{
+    BEGIN_TEST("solitaire deal/draw/undo");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(80000000);
+    #define SOL_HASH() ({ uint32_t h = 2166136261u; flush(); \
+        for (uint16_t y = 0; y < 229; y++) \
+            for (uint16_t x = 0; x < GPU_X; x++) { h ^= GetPixel(x, y); h *= 16777619u; } \
+        h; })
+    Random_Seed(31);
+    SetupCallbacks(&G31_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(countNonBlack() > 5000, "solitaire did not draw the deal");
+    uint32_t dealt = SOL_HASH();
+    /* No forced hint screen: the very first stock tap must draw a card, not
+       merely dismiss an overlay. */
+    setTouch(1, 24, 27); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    uint32_t drawn = SOL_HASH();
+    CHECK(drawn != dealt, "first stock tap did not draw (a hint screen swallowed it?)");
+    /* UNDO puts the card back */
+    setTouch(1, 112, 10); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    CHECK(SOL_HASH() == dealt, "undo did not restore the deal");
+    /* Any card may start an empty column: move col0's ace to a foundation to
+       empty it, then drop col1's 9S (a non-king) onto it. Seed 31 deals
+       col0 = AC, col1 = 6D(down) 9S. */
+    setTouch(1, 24, 80); stepFrame(); setTouch(0, 0, 0); stepFrame();   /* select AC */
+    setTouch(1, 136, 27); stepFrame(); setTouch(0, 0, 0); stepFrame();  /* -> foundation */
+    setTouch(1, 68, 80); stepFrame(); setTouch(0, 0, 0); stepFrame();   /* select 9S */
+    setTouch(1, 24, 80); stepFrame(); setTouch(0, 0, 0); stepFrame();   /* -> empty col0 */
+    flush();
+    CHECK(GetPixel(10, 75) == 0xFFFF, "a non-king could not be placed on an empty column");
+    /* AUTO must not crash or switch away */
+    setTouch(1, 112, 26); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(_callbacks.initCallback == G31_Callbacks.initCallback, "solitaire switched away");
+    /* HELP opens the overlay on demand, a tap dismisses it again */
+    uint32_t preHelp = SOL_HASH();
+    setTouch(1, 112, 44); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    uint32_t withHelp = SOL_HASH();
+    CHECK(withHelp != preHelp, "the HELP button did not open the overlay");
+    setTouch(1, 160, 120); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    CHECK(SOL_HASH() == preHelp, "tapping did not dismiss the overlay");
+    /* keyboard: walk to a tableau column and select a card */
+    for (int i = 0; i < 7; i++) tapKey(KEY_RIGHT);
+    tapKey(KEY_DOWN);
+    tapKey(KEY_UP);
+    tapKey(KEY_DOWN);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(countNonBlack() > 5000, "solitaire stopped drawing after keyboard input");
+    #undef SOL_HASH
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Pinball: launch the ball, score, and drain all three balls to game over. */
+static void test_pinball(void)
+{
+    BEGIN_TEST("pinball launch/score/game over");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(90000000);
+    #define PB_SCORE_HASH() ({ uint32_t h = 2166136261u; flush(); \
+        for (uint16_t y = 38; y < 52; y++) \
+            for (uint16_t x = 214; x < 286; x++) { h ^= GetPixel(x, y); h *= 16777619u; } \
+        h; })
+    Random_Seed(7);
+    SetupCallbacks(&G32_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(countNonBlack() > 5000, "pinball did not draw the table");
+    uint32_t score0 = PB_SCORE_HASH();
+    /* charge the plunger with DOWN, release to launch, then flip a while */
+    setKeys(KEY_DOWN);
+    for (int i = 0; i < 40; i++) stepFrame();
+    setKeys(KEY_NONE);
+    for (int f = 0; f < 300; f++)
+    {
+        setKeys((f%7==0) ? KEY_LEFT : ((f%11==0) ? KEY_RIGHT : KEY_NONE));
+        stepFrame();
+    }
+    setKeys(KEY_NONE);
+    CHECK(PB_SCORE_HASH() != score0, "pinball did not score after launching");
+    CHECK(_callbacks.initCallback == G32_Callbacks.initCallback, "pinball switched away");
+    /* with no flipping every ball drains; re-launch periodically until over.
+       Ball save adds a few seconds per ball, so allow a generous cap. */
+    int done = 0;
+    for (int f = 0; f < 5000 && !done; f++)
+    {
+        setKeys((f%90 < 30) ? KEY_DOWN : KEY_NONE);
+        stepFrame();
+        if (mainMemory._gameState == GS_DONE) done = 1;
+    }
+    CHECK(done, "pinball never reached game over");
+    #undef PB_SCORE_HASH
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* hash of a rectangular region of the last rendered frame */
+static uint32_t regionHash(int x0, int y0, int x1, int y1)
+{
+    flush();
+    uint32_t h = 2166136261u;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++) { h ^= GetPixel((uint16_t)x, (uint16_t)y); h *= 16777619u; }
+    return h;
+}
+
+/* the four games added in the bug-hunt pass */
+static void test_added_games(void)
+{
+    BEGIN_TEST("added games (15 puzzle, flood-it, reversi, hangman)");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(100000000);
+
+    /* --- 15 puzzle: scrambled (not solved) and reacts to the arrow keys --- */
+    Random_Seed(33);
+    SetupCallbacks(&G33_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "15 puzzle started out solved");
+    uint32_t pBefore = regionHash(60, 32, 260, 232);
+    /* perpendicular slides so they cannot cancel each other out */
+    tapKey(KEY_LEFT); tapKey(KEY_UP); tapKey(KEY_LEFT); tapKey(KEY_UP);
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(regionHash(60, 32, 260, 232) != pBefore, "15 puzzle did not react to the arrow keys");
+
+    /* --- flood-it: tapping palette colours floods the board --- */
+    Random_Seed(34);
+    SetupCallbacks(&G34_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    uint32_t fBefore = regionHash(64, 24, 256, 216);
+    /* two different palette colours: at least one differs from the corner */
+    setTouch(1, 94, 228); stepFrame(); setTouch(0, 0, 0); stepFrame();
+    setTouch(1, 138, 228); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(regionHash(64, 24, 256, 216) != fBefore, "flood-it did not react to the palette");
+
+    /* --- reversi: a legal opening move adds a disc and the CPU answers --- */
+    Random_Seed(35);
+    SetupCallbacks(&G35_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    /* count the discs by sampling the centre of every cell */
+    #define RV_DISCS() ({ int n = 0; flush(); \
+        for (int cy = 0; cy < 8; cy++) for (int cx = 0; cx < 8; cx++) { \
+            GPU_Color c = GetPixel((uint16_t)(6 + cx*26 + 13), (uint16_t)(22 + cy*26 + 13)); \
+            int r = PIX_R5(c), g = PIX_G6(c), b = PIX_B5(c); \
+            if (r >= 20 || !(g > r + 5 && g > b + 5)) n++; } \
+        n; })
+    int discs0 = RV_DISCS();
+    CHECK(discs0 == 4, "reversi did not start with 4 discs (got %d)", discs0);
+    /* (col 4, row 2) is a legal opening: it flips the white disc below it */
+    setTouch(1, 123, 87); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 60; i++) stepFrame();   /* let the CPU think and answer */
+    int discs1 = RV_DISCS();
+    CHECK(discs1 >= 6, "reversi move + CPU answer did not add discs (%d -> %d)", discs0, discs1);
+    CHECK(_callbacks.initCallback == G35_Callbacks.initCallback, "reversi switched away");
+    #undef RV_DISCS
+
+    /* --- hangman: guessing a letter marks the alphabet grid --- */
+    Random_Seed(36);
+    SetupCallbacks(&G36_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    uint32_t hBefore = regionHash(10, 178, 310, 226);
+    setTouch(1, 21, 189); stepFrame(); setTouch(0, 0, 0);   /* letter A */
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(regionHash(10, 178, 310, 226) != hBefore, "hangman did not react to a guess");
+    CHECK(countNonBlack() > 1000, "hangman stopped drawing");
+
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Regression: a blocked push in Sokoban used to leave a phantom undo entry,
+   so pressing UNDO afterwards "reverted" to the same spot and silently
+   decremented the move counter. A blocked move must not create an undo. */
+static void test_sokoban_undo(void)
+{
+    BEGIN_TEST("sokoban blocked push does not corrupt undo");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(110000000);
+    Random_Seed(28);
+    SetupCallbacks(&G28_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    /* Level 1: player (3,2). Walk down then left twice -> player (1,3). */
+    tapKey(KEY_DOWN); for (int i = 0; i < 3; i++) stepFrame();
+    tapKey(KEY_LEFT); for (int i = 0; i < 3; i++) stepFrame();
+    uint32_t at2 = regionHash(40, 28, 280, 220);   /* player at (2,3) */
+    tapKey(KEY_LEFT); for (int i = 0; i < 3; i++) stepFrame();
+    /* two more LEFTs run into the left wall: blocked moves */
+    tapKey(KEY_LEFT); for (int i = 0; i < 3; i++) stepFrame();
+    tapKey(KEY_LEFT); for (int i = 0; i < 3; i++) stepFrame();
+    uint32_t at3 = regionHash(40, 28, 280, 220);   /* player at (1,3) */
+    CHECK(at3 != at2, "sokoban did not move");
+    /* UNDO must revert the last REAL move (back to (2,3)), not the blocked one */
+    setTouch(1, 20, 10); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(regionHash(40, 28, 280, 220) == at2,
+          "sokoban undo after blocked pushes did not revert the last real move");
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* the two action games added in the second pass */
+static void test_action_games(void)
+{
+    BEGIN_TEST("action games (bomberman, tank fight)");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(120000000);
+
+    /* Bomberman: standing on your own bomb costs a life; three deaths end the
+       game. Exercises place -> fuse -> explosion -> flame death -> respawn ->
+       game over. Enemies may score extra kills while we stand still, so stop
+       pressing keys as soon as the game is over (a key would restart it). */
+    Random_Seed(37);
+    SetupCallbacks(&G37_Callbacks);
+    for (int attempt = 0; attempt < 8; attempt++)
+    {
+        if (mainMemory._gameState == GS_DONE) break;
+        for (int i = 0; i < 35; i++) stepFrame();   /* past GET READY */
+        if (mainMemory._gameState == GS_DONE) break;
+        setKeys(KEY_UP | KEY_DOWN);                  /* place a bomb, stand still */
+        stepFrame(); stepFrame();
+        setKeys(KEY_NONE);
+        for (int i = 0; i < 130; i++) stepFrame();   /* fuse + death + respawn */
+    }
+    CHECK(mainMemory._gameState == GS_DONE,
+          "bomberman never reached game over from self-bombs");
+    CHECK(_callbacks.initCallback == G37_Callbacks.initCallback, "bomberman switched away");
+
+    /* Tank fight: drive and fire through a long battle, it must keep rendering */
+    Random_Seed(38);
+    SetupCallbacks(&G38_Callbacks);
+    for (int i = 0; i < 35; i++) stepFrame();
+    for (int f = 0; f < 400; f++)
+    {
+        if (f % 20 == 0)      setKeys(KEY_UP | KEY_DOWN);   /* fire */
+        else if (f % 20 == 5) setKeys(KEY_NONE);
+        else if (f % 3 == 0)  setKeys(KEY_LEFT);
+        else if (f % 3 == 1)  setKeys(KEY_RIGHT);
+        else                  setKeys(KEY_NONE);
+        stepFrame();
+    }
+    setKeys(KEY_NONE);
+    CHECK(countNonBlack() > 2000, "tank fight stopped drawing");
+    CHECK(_callbacks.initCallback == G38_Callbacks.initCallback, "tank fight switched away");
+
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
 }
 
 /* ------------------------------------------------------------------- main */
@@ -1069,6 +1698,8 @@ int main(int argc, char ** argv)
     test_rgb_format();
     test_font_rendering();
     test_line_clipping();
+    test_circle_radius_zero();
+    test_circle_fill_solid();
     test_touch_mapping();
     test_touch_filtering();
     test_keyboard_debounce();
@@ -1078,6 +1709,19 @@ int main(int argc, char ** argv)
     test_menu();
     test_games_smoke();
     test_game_specifics();
+    test_touch_tap_latch();
+    test_calculator_overflow();
+    test_calculator_scientific();
+    test_2048_reset_bounds();
+    test_new_games();
+    test_added_games();
+    test_sokoban_undo();
+    test_action_games();
+    test_memory_mismatch_timing();
+    test_tunnel_ship_position();
+    test_solitaire();
+    test_pinball();
+    test_missile_defense_waves();
     test_main_loop_menu_button();
 
     printf("\n%d checks, %d failures\n", _checks, _failures);

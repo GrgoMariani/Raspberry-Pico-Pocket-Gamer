@@ -26,7 +26,7 @@ typedef struct {
 static const FontDescription * f_small = &fontDescription[0];
 static const FontDescription * f_big = &fontDescription[2];
 
-#define NO_OF_GAMES 23
+#define NO_OF_GAMES 38
 static const GameItem listOfGames[NO_OF_GAMES] = {
     {"TicTacToe 1P", &G1_Callbacks},
     {"TicTacToe 2P", &G2_Callbacks},
@@ -51,6 +51,21 @@ static const GameItem listOfGames[NO_OF_GAMES] = {
     {"PacMan",       &G21_Callbacks},
     {"Invaders",     &G22_Callbacks},
     {"Turbo Drive",  &G23_Callbacks},
+    {"Minesweeper",  &G24_Callbacks},
+    {"Simon",        &G25_Callbacks},
+    {"Flappy Bird",  &G26_Callbacks},
+    {"Memory",       &G27_Callbacks},
+    {"Sokoban",      &G28_Callbacks},
+    {"Whack-a-mole", &G29_Callbacks},
+    {"Doodle Jump",  &G30_Callbacks},
+    {"Solitaire",    &G31_Callbacks},
+    {"Pinball",      &G32_Callbacks},
+    {"15 Puzzle",    &G33_Callbacks},
+    {"Flood-It",     &G34_Callbacks},
+    {"Reversi",      &G35_Callbacks},
+    {"Hangman",      &G36_Callbacks},
+    {"Bomberman",    &G37_Callbacks},
+    {"Tank Fight",   &G38_Callbacks},
 };
 
 /* layout of the list on the left half of the screen */

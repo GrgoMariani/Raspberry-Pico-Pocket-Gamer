@@ -68,6 +68,8 @@ typedef struct {
     uint8_t _respawn;
     uint8_t _gameOver;
     uint8_t _waveBanner;
+    uint8_t _waveLives;       /* lives at the start of the wave, for the perfect bonus */
+    uint8_t _perfectBanner;
 } Game17Memory;
 
 static Game17Memory * const memory = (Game17Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -200,6 +202,7 @@ static void StartWave(uint8_t wave)
 {
     memory->_wave = wave;
     memory->_waveBanner = 40;
+    memory->_waveLives = memory->_lives;
     uint8_t count = (uint8_t)(2 + wave);
     if (count > 7)
         count = 7;
@@ -245,6 +248,8 @@ static void G_Init(void)
     memset(memory, 0, sizeof(Game17Memory));
     memory->_lives = START_LIVES;
     memory->_nextBonus = BONUS_EVERY;
+    Touch_ClearTap();
+    Keyboard_GetPressedKeys();
     RespawnShip();
     StartWave(1);
     mainMemory._gameState = GS_RUNNING;
@@ -312,9 +317,12 @@ static void Tick(void)
         memory->_invulnerable--;
     if (memory->_waveBanner)
         memory->_waveBanner--;
+    if (memory->_perfectBanner)
+        memory->_perfectBanner--;
 
     KeyPressedEnum held = Keyboard_GetHeldKeys();
-    KeyPressedEnum pressed = Keyboard_GetPressedKeys();
+    /* drain the press latch, firing uses the held state (auto fire) */
+    Keyboard_GetPressedKeys();
 
     /* touch: the top third is the engine, the outer thirds turn, a tap in the
        middle fires */
@@ -327,7 +335,12 @@ static void Tick(void)
             touchLeft = 1;
         else if (mainMemory.touch_X > 2*GPU_X/3)
             touchRight = 1;
-        else if (mainMemory.touchPressedNew)
+    }
+    {
+        /* the tap latch delivers the press even when it happened between two
+           logic ticks */
+        uint16_t tx, ty;
+        if (Touch_TakeTap(&tx, &ty) && ty >= GPU_Y/3 && tx >= GPU_X/3 && tx <= 2*GPU_X/3)
             touchFire = 1;
     }
 
@@ -369,7 +382,7 @@ static void Tick(void)
         memory->_shipX = WrapX(memory->_shipX + memory->_shipVX);
         memory->_shipY = WrapY(memory->_shipY + memory->_shipVY);
 
-        if ((pressed & KEY_DOWN) || touchFire)
+        if ((held & KEY_DOWN) || touchFire)
             Fire();
     }
 
@@ -435,7 +448,15 @@ static void Tick(void)
         }
     }
     if (alive == 0 && !memory->_respawn && !memory->_gameOver)
+    {
+        /* clearing a wave without losing a ship is worth a bonus */
+        if (memory->_lives == memory->_waveLives)
+        {
+            memory->_score += 250;
+            memory->_perfectBanner = 50;
+        }
         StartWave((uint8_t)(memory->_wave + 1));
+    }
 
     for (uint8_t i = 0; i < MAX_SPARKS; i++)
     {
@@ -458,6 +479,13 @@ static void ResetButtonTouched(void)
 
 static void G_Update(void)
 {
+    /* check the reset button every main loop iteration, a touch press edge
+       only lives for one iteration and would be missed between two ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
         mainMemory._lastRenderedTick = tick - 4*NUM_TICKS;
@@ -465,10 +493,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -497,13 +522,7 @@ static void G_Draw(void)
     GPU_ClearFramebuffers();
 
     /* stars */
-    for (uint8_t i = 0; i < 40; i++)
-    {
-        uint32_t seed = (uint32_t)i*2654435761u;
-        int16_t sx = (int16_t)((seed >> 7) % GPU_X);
-        int16_t sy = (int16_t)((seed >> 17) % GPU_Y);
-        GPU_DrawPixel(((seed >> 3) & 1) ? C_GRAY_DARK : C_GRAY_MEDIUM, (uint16_t)sx, (uint16_t)sy);
-    }
+    GPU_DrawStarfield(7, 50, IF_GetCurrentTime());
 
     GPU3D_Init();
     GPU3D_SetOrtho(GPU_X/2, GPU_Y/2, FX_ONE);
@@ -547,6 +566,7 @@ static void G_Draw(void)
     {
         if (!memory->_bullets[i].life)
             continue;
+        GPU_DrawGlow(C_YELLOW, ScreenX(memory->_bullets[i].x), ScreenY(memory->_bullets[i].y), 4);
         GPU_DrawFilledCircle(C_YELLOW, ScreenX(memory->_bullets[i].x), ScreenY(memory->_bullets[i].y), 1);
     }
 
@@ -577,6 +597,9 @@ static void G_Draw(void)
         len = sprintf(text, "WAVE %u", memory->_wave);
         GPU_DrawTextOutlined(C_CYAN, C_BLACK, fb, GPU_X/2, GPU_Y/2 - 60, text);
     }
+
+    if (memory->_perfectBanner)
+        GPU_DrawTextOutlined(C_C3, C_BLACK, fm, GPU_X/2, GPU_Y/2 - 40, "PERFECT WAVE +250");
 
     if (memory->_gameOver)
     {

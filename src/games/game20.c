@@ -40,6 +40,7 @@ typedef struct {
     float maxRadius;
     uint8_t active;
     uint8_t chain;
+    uint8_t shrinking;   /* 0 = growing, 1 = shrinking (never grows again) */
 } Boom;
 
 typedef struct {
@@ -54,6 +55,7 @@ typedef struct {
     float _crossX, _crossY;
     uint8_t _usingKeys;
     uint32_t _score;
+    uint32_t _lastBonus;      /* points earned at the end of the last wave */
     uint8_t _wave;
     uint8_t _state;         /* 0 ready, 1 wave, 2 between, 3 over */
     uint8_t _stateTick;
@@ -102,6 +104,9 @@ static void StartWave(uint8_t wave)
                 memory->_cityAlive[i] = 1;
                 break;
             }
+    /* a key let go during the "wave clear" pause must not fire a missile the
+       moment the next wave starts */
+    Keyboard_ClearReleases();
     memory->_state = 1;
     memory->_stateTick = 0;
 }
@@ -114,6 +119,9 @@ static void G_Init(void)
         memory->_cityAlive[i] = 1;
     memory->_crossX = GPU_X/2;
     memory->_crossY = GPU_Y/2;
+    Touch_ClearTap();
+    Keyboard_GetPressedKeys();
+    Keyboard_ClearReleases();
     StartWave(1);
     memory->_state = 0;
     mainMemory._gameState = GS_RUNNING;
@@ -132,6 +140,7 @@ static void AddBoom(float x, float y, float maxRadius, uint8_t chain)
         memory->_booms[i].maxRadius = maxRadius;
         memory->_booms[i].active = 1;
         memory->_booms[i].chain = chain;
+        memory->_booms[i].shrinking = 0;
         return;
     }
 }
@@ -258,12 +267,16 @@ static void Tick(void)
         if (Keyboard_TakeKeyRelease(KEY_LEFT) || Keyboard_TakeKeyRelease(KEY_RIGHT) ||
             Keyboard_TakeKeyRelease(KEY_UP) || Keyboard_TakeKeyRelease(KEY_DOWN))
             fire = 1;
-        if (mainMemory.touchPressedNew)
         {
-            fire = 1;
-            fx = (float)mainMemory.touch_X;
-            fy = (float)mainMemory.touch_Y;
-            memory->_usingKeys = 0;
+            /* the tap latch delivers the press even between two logic ticks */
+            uint16_t tx, ty;
+            if (Touch_TakeTap(&tx, &ty))
+            {
+                fire = 1;
+                fx = (float)tx;
+                fy = (float)ty;
+                memory->_usingKeys = 0;
+            }
         }
         if (fire)
             Launch(fx, fy);
@@ -321,8 +334,19 @@ static void Tick(void)
             Boom * b = &memory->_booms[i];
             if (!b->active)
                 continue;
-            if (b->radius < b->maxRadius)
+            /* grow to maxRadius, then shrink back down and disappear. The
+               phase flag matters: comparing radius to maxRadius every tick
+               made it oscillate around the peak forever, so explosions never
+               cleared and the wave could never finish. */
+            if (!b->shrinking)
+            {
                 b->radius += 1.1f;
+                if (b->radius >= b->maxRadius)
+                {
+                    b->radius = b->maxRadius;
+                    b->shrinking = 1;
+                }
+            }
             else
             {
                 b->radius -= 0.9f;
@@ -342,7 +366,8 @@ static void Tick(void)
                 if (dx*dx + dy*dy < b->radius*b->radius)
                 {
                     m->active = 0;
-                    memory->_score += 25;
+                    /* kills from a chained (ground) explosion are worth more */
+                    memory->_score += b->chain ? 40 : 25;
                     if (b->chain)
                         AddBoom(m->x, m->y, 26.0f, 1);
                 }
@@ -365,10 +390,13 @@ static void Tick(void)
             for (uint8_t i = 0; i < NUM_CITIES; i++)
                 if (memory->_cityAlive[i])
                     cities++;
+            uint32_t bonus = 0;
             for (uint8_t b = 0; b < NUM_BATTERIES; b++)
                 if (memory->_ammo[b] > 0)
-                    memory->_score += (uint32_t)memory->_ammo[b]*5;
-            memory->_score += 100*cities;
+                    bonus += (uint32_t)memory->_ammo[b]*5;
+            bonus += 100*cities;
+            memory->_score += bonus;
+            memory->_lastBonus = bonus;
             if (cities == 0)
             {
                 memory->_state = 3;
@@ -407,6 +435,13 @@ static void ResetButtonTouched(void)
 
 static void G_Update(void)
 {
+    /* check the reset button every main loop iteration, a touch press edge
+       only lives for one iteration and would be missed between two ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
         mainMemory._lastRenderedTick = tick - 4*NUM_TICKS;
@@ -414,10 +449,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -495,6 +527,7 @@ static void G_Draw(void)
         if (!s->active)
             continue;
         GPU_DrawLine(C_CYAN, (int16_t)s->cx, (int16_t)s->cy, (int16_t)(s->cx - s->vx*4), (int16_t)(s->cy - s->vy*4));
+        GPU_DrawGlow(C_CYAN, (int16_t)s->cx, (int16_t)s->cy, 4);
         GPU_DrawFilledCircle(C_WHITE, (int16_t)s->cx, (int16_t)s->cy, 1);
     }
     for (uint8_t i = 0; i < MAX_BOOM; i++)
@@ -502,6 +535,7 @@ static void G_Draw(void)
         Boom * b = &memory->_booms[i];
         if (!b->active)
             continue;
+        GPU_DrawGlow(C_ORANGE, (int16_t)b->x, (int16_t)b->y, (int16_t)b->radius);
         GPU_DrawEmptyCircle(C_ORANGE, (int16_t)b->x, (int16_t)b->y, (int16_t)b->radius);
         GPU_DrawEmptyCircle(C_YELLOW, (int16_t)b->x, (int16_t)b->y, (int16_t)(b->radius*0.6f));
         GPU_DrawFilledCircle(C_WHITE, (int16_t)b->x, (int16_t)b->y, (int16_t)(b->radius*0.25f));
@@ -529,6 +563,8 @@ static void G_Draw(void)
     else if (memory->_state == 2)
     {
         GPU_DrawTextOutlined(C_C3, C_BLACK, fb, GPU_X/2, 60, "WAVE CLEAR");
+        len = sprintf(text, "BONUS %u", (unsigned)memory->_lastBonus);
+        GPU_DrawTextCentered(C_YELLOW, fm, GPU_X/2, 84, text);
     }
     else if (memory->_state == 3)
     {

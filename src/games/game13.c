@@ -11,7 +11,9 @@ typedef enum {
 	PS_NOT_INITIALIZED,
 	PS_PLAYING,
 	PS_PLAYER_SCORE,
-	PS_COMPUTER_SCORE
+	PS_COMPUTER_SCORE,
+	PS_PLAYER_WINS,
+	PS_COMPUTER_WINS
 } PongState;
 
 typedef struct {
@@ -21,6 +23,10 @@ typedef struct {
 	float ball_y;
 	float ball_sin;
 	float ball_cos;
+	float ballSpeedMul;      /* the rally gets faster with every return */
+	float trail_x[6];
+	float trail_y[6];
+	uint8_t trailIdx;
 	unsigned int score_player;
 	unsigned int score_computer;
 	PongState pongState;
@@ -35,20 +41,27 @@ static uint32_t CalculateTick()
     return IF_GetCurrentTime()/(ONE_SECOND/NUM_TICKS);
 }
 
-static int InitiateBall()
+#define WIN_SCORE 11
+
+/* serves the ball in a random direction, but never flatter than ~40 degrees
+   so that the rally cannot get stuck bouncing between the side walls */
+static void ServeBall()
 {
-	memory->player_y = 0.0f;
-	memory->computer_y = 0.0f;
 	memory->ball_x=0.0f;
 	memory->ball_y=0.0f;
-	memory->ball_sin=0.0f;
-	memory->ball_cos=1.0f;
-	uint32_t seed = IF_Random();
-	memory->ball_sin = sin(seed);
-	memory->ball_cos = cos(seed);
-	if (memory->ball_sin == 1.0f)
-		return 1;
-	return 0;
+	memory->ballSpeedMul = 1.0f;
+	for (uint8_t i = 0; i < 6; i++)
+	{
+		memory->trail_x[i] = 0.0f;
+		memory->trail_y[i] = 0.0f;
+	}
+	memory->trailIdx = 0;
+	int32_t angleDeg = (int32_t)Random_Range(81) - 40;      /* -40 .. +40 */
+	float rad = (float)angleDeg * 3.14159265f/180.0f;
+	memory->ball_sin = sinf(rad);
+	memory->ball_cos = cosf(rad);
+	if (Random_Range(2))
+		memory->ball_cos = -memory->ball_cos;
 }
 
 static void G_Init(void)
@@ -56,9 +69,13 @@ static void G_Init(void)
     mainMemory._gameState = GS_RUNNING;
 	memory->score_player = 0;
 	memory->score_computer = 0;
+	memory->player_y = 0.0f;
+	memory->computer_y = 0.0f;
 	memory->pongState = PS_NOT_INITIALIZED;
 	mainMemory._lastRenderedTick = CalculateTick();
-	InitiateBall();
+	Keyboard_GetPressedKeys();
+	Touch_ClearTap();
+	ServeBall();
 }
 
 #define EDGE_X (16)
@@ -74,6 +91,12 @@ static void G_Init(void)
 
 
 
+static void SpeedUpRally()
+{
+	if (memory->ballSpeedMul < 1.8f)
+		memory->ballSpeedMul += 0.06f;
+}
+
 static void CheckPlayerCollision()
 {
 	if (memory->ball_y-memory->player_y <= PLAYER_H/2 && memory->ball_y-memory->player_y >= -PLAYER_H/2)
@@ -81,11 +104,21 @@ static void CheckPlayerCollision()
 		float diff = (memory->ball_y-memory->player_y)/((PLAYER_H+0.1)/2);
 		memory->ball_sin = diff;
 		memory->ball_cos = sqrt(1-diff*diff);
+		/* put the ball back in front of the paddle so it cannot be hit
+		   twice while it slowly leaves the contact zone */
+		memory->ball_x = -(100.0f-BALL_SIZE/2);
+		SpeedUpRally();
 	}
 	else
 	{
 		memory->score_computer++;
-		memory->pongState = PS_COMPUTER_SCORE;
+		if (memory->score_computer >= WIN_SCORE)
+		{
+			memory->pongState = PS_COMPUTER_WINS;
+			mainMemory._gameState = GS_DONE;
+		}
+		else
+			memory->pongState = PS_COMPUTER_SCORE;
 	}
 }
 
@@ -96,18 +129,30 @@ static void CheckAICollision()
 		float diff = (memory->ball_y-memory->computer_y)/((PLAYER_H+0.1)/2);
 		memory->ball_sin = diff;
 		memory->ball_cos = -sqrt(1-diff*diff);
+		memory->ball_x = (100.0f-BALL_SIZE/2);
+		SpeedUpRally();
 	}
 	else
 	{
 		memory->score_player++;
-		memory->pongState = PS_PLAYER_SCORE;
+		if (memory->score_player >= WIN_SCORE)
+		{
+			memory->pongState = PS_PLAYER_WINS;
+			mainMemory._gameState = GS_DONE;
+		}
+		else
+			memory->pongState = PS_PLAYER_SCORE;
 	}
 }
 
 static void MoveBall()
 {
-	memory->ball_x += memory->ball_cos*BALL_SPEED;
-	memory->ball_y += memory->ball_sin*BALL_SPEED;
+	/* remember the recent path for a motion trail */
+	memory->trail_x[memory->trailIdx] = memory->ball_x;
+	memory->trail_y[memory->trailIdx] = memory->ball_y;
+	memory->trailIdx = (uint8_t)((memory->trailIdx + 1) % 6);
+	memory->ball_x += memory->ball_cos*BALL_SPEED*memory->ballSpeedMul;
+	memory->ball_y += memory->ball_sin*BALL_SPEED*memory->ballSpeedMul;
 	if (memory->ball_x < -(100.0f-BALL_SIZE/2))
 	{
 		CheckPlayerCollision();
@@ -130,28 +175,61 @@ static void MoveBall()
 
 static void MoveAI()
 {
-	if (memory->computer_y - 2.8f*PLAYER_SPEED>memory->ball_y)
+	/* rubber-band difficulty: the AI keeps up when the player is winning and
+	   eases off when the player is behind, so matches stay close */
+	float aiSpeed = PLAYER_SPEED;
+	int diff = (int)memory->score_player - (int)memory->score_computer;
+	aiSpeed += (float)diff * PLAYER_SPEED * 0.06f;
+	if (aiSpeed < PLAYER_SPEED*0.6f) aiSpeed = PLAYER_SPEED*0.6f;
+	if (aiSpeed > PLAYER_SPEED*1.3f) aiSpeed = PLAYER_SPEED*1.3f;
+	if (memory->computer_y - 2.8f*aiSpeed>memory->ball_y)
 	{
-		memory->computer_y -= PLAYER_SPEED;
+		memory->computer_y -= aiSpeed;
 		if (memory->computer_y < -(100.0f-PLAYER_H/2))
 			memory->computer_y = -(100.0f-PLAYER_H/2);
 	}
-	else if (memory->computer_y + 2.8f*PLAYER_SPEED<memory->ball_y)
+	else if (memory->computer_y + 2.8f*aiSpeed<memory->ball_y)
 	{
-		memory->computer_y += PLAYER_SPEED;
+		memory->computer_y += aiSpeed;
 		if (memory->computer_y > (100.0f-PLAYER_H/2))
 			memory->computer_y = (100.0f-PLAYER_H/2);
 	}
 }
 
+#define RESET_BUTTON_W (80)
+#define RESET_BUTTON_H (30)
+#define RESET_BUTTON_X (GPU_X/2 - RESET_BUTTON_W/2)
+#define RESET_BUTTON_Y (GPU_Y/2 + 30)
+
+/* dragging a finger moves the paddle to the finger's height */
+static void TouchPaddle(void)
+{
+	float y = ((float)mainMemory.touch_Y - EDGE_Y)/BOX_H*200.0f - 100.0f;
+	if (y < -(100.0f-PLAYER_H/2)) y = -(100.0f-PLAYER_H/2);
+	if (y > (100.0f-PLAYER_H/2)) y = (100.0f-PLAYER_H/2);
+	memory->player_y = y;
+}
+
 static void G_Update(void)
 {
+	if (mainMemory._gameState == GS_DONE)
+	{
+		if (mainMemory.touchPressedNew)
+		{
+			if (mainMemory.touch_X >= RESET_BUTTON_X && mainMemory.touch_X <= RESET_BUTTON_X+RESET_BUTTON_W &&
+			    mainMemory.touch_Y >= RESET_BUTTON_Y && mainMemory.touch_Y <= RESET_BUTTON_Y+RESET_BUTTON_H)
+				G_Init();
+		}
+		return;
+	}
 	KeyPressedEnum keyboard_held = Keyboard_GetHeldKeys();
 	uint32_t current_tick = CalculateTick();
 	while (mainMemory._lastRenderedTick < current_tick)
 	{
 		if (memory->pongState == PS_PLAYING)
 		{
+			if (mainMemory.touchPressed)
+				TouchPaddle();
 			if (keyboard_held & KEY_UP)
 			{
 				memory->player_y -= PLAYER_SPEED;
@@ -169,10 +247,12 @@ static void G_Update(void)
 		}
 		else
 		{
-			if (keyboard_held & (KEY_DOWN | KEY_UP))
+			uint16_t tx, ty;
+			uint8_t tap = Touch_TakeTap(&tx, &ty);
+			if ((keyboard_held & (KEY_DOWN | KEY_UP)) || tap)
 			{
 				memory->pongState = PS_PLAYING;
-				while (InitiateBall());
+				ServeBall();
 			}
 		}
 		mainMemory._lastRenderedTick++;
@@ -197,10 +277,18 @@ static void G_Draw(void)
 	                    (int16_t)(EDGE_Y+(memory->computer_y+100)/200*BOX_H-PLAYER_H/2), PLAYER_W, PLAYER_H);
 	// Draw Ball
 	{
+		/* motion trail */
+		for (uint8_t i = 0; i < 6; i++)
+		{
+			uint8_t idx = (uint8_t)((memory->trailIdx + i) % 6);
+			int16_t tx = (int16_t)(((memory->trail_x[idx]+100)/200)*BOX_W+EDGE_X);
+			int16_t ty = (int16_t)(((memory->trail_y[idx]+100)/200)*BOX_H+EDGE_Y);
+			GPU_DrawFilledCircle(GPU_ShadeColor(C_YELLOW, (int16_t)(40 + i*20)), tx, ty, 1);
+		}
 		int16_t bx = (int16_t)(((memory->ball_x+100)/200)*BOX_W+EDGE_X);
 		int16_t by = (int16_t)(((memory->ball_y+100)/200)*BOX_H+EDGE_Y);
-		GPU_DrawFilledCircle(C_YELLOW, bx, by, BALL_SIZE);
-		GPU_DrawPixel(RGB(255,255,220), (uint16_t)(bx-1), (uint16_t)(by-1));
+		GPU_DrawGlow(C_YELLOW, bx, by, (int16_t)(BALL_SIZE+4));
+		GPU_DrawBall(C_YELLOW, bx, by, BALL_SIZE);
 	}
 	// Draw Score
 	char text[32];
@@ -213,7 +301,7 @@ static void G_Draw(void)
 	if (memory->pongState == PS_NOT_INITIALIZED)
 	{
 		GPU_DrawTextOutlined(C_C3, C_BLACK, f_big, GPU_X/2, (int16_t)(GPU_Y/2-f_big->height), "PRESS A KEY");
-		GPU_DrawTextCentered(C_GRAY_LIGHT, fm, GPU_X/2, (int16_t)(GPU_Y/2+10), "up/down moves, first to 11");
+		GPU_DrawTextCentered(C_GRAY_LIGHT, fm, GPU_X/2, (int16_t)(GPU_Y/2+10), "up/down or drag, first to 11");
 	}
 	else if (memory->pongState == PS_PLAYER_SCORE)
 	{
@@ -222,6 +310,19 @@ static void G_Draw(void)
 	else if (memory->pongState == PS_COMPUTER_SCORE)
 	{
 		GPU_DrawTextOutlined(C_C2, C_BLACK, f_big, GPU_X/2, GPU_Y/2-f_big->height/2, "AI SCORES");
+	}
+	else if (memory->pongState == PS_PLAYER_WINS || memory->pongState == PS_COMPUTER_WINS)
+	{
+		GPU_DrawPanel(RGB(16,18,48), memory->pongState == PS_PLAYER_WINS ? C_C3 : C_RED,
+		              (int16_t)(GPU_X/2-90), (int16_t)(GPU_Y/2-44), 180, 92);
+		GPU_DrawTextOutlined(memory->pongState == PS_PLAYER_WINS ? C_C3 : C_RED, C_BLACK, f_big,
+		                     GPU_X/2, (int16_t)(GPU_Y/2-38),
+		                     memory->pongState == PS_PLAYER_WINS ? "YOU WIN" : "AI WINS");
+		char score[24];
+		sprintf(score, "%u : %u", memory->score_player, memory->score_computer);
+		GPU_DrawTextCentered(C_WHITE, fm, GPU_X/2, (int16_t)(GPU_Y/2-10), score);
+		GPU_DrawButton(C_YELLOW, C_BLACK, f_big, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
+		               RESET_BUTTON_W, RESET_BUTTON_H);
 	}
 }
 

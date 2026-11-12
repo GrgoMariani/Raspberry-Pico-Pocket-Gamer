@@ -20,6 +20,9 @@ typedef struct {
     C4Enum _playerNext;
     C4Enum _playerAI;
     uint8_t _choicePosition;
+    uint8_t _lastCol;       /* most recently placed stone, for the drop animation */
+    uint8_t _lastRow;
+    uint32_t _dropStart;    /* when the last stone was dropped (animation) */
 } Game7Memory;
 
 typedef struct {
@@ -54,7 +57,10 @@ static void G_Init(void)
     memory->_playerNext = C4_PLAYER_1;
     memory->_playerAI = rand & 0x01 ? C4_PLAYER_1 : C4_PLAYER_2;
     memory->_choicePosition = 0;
+    memory->_dropStart = IF_GetCurrentTime() - ONE_SECOND;
     mainMemory._lastRenderedTick = CalculateTick();
+    Keyboard_GetPressedKeys();
+    Touch_ClearTap();
 }
 
 /* returns the row the stone landed in, or -1 when the column is full.
@@ -76,6 +82,9 @@ static int16_t Drop(C4Enum player, uint8_t row)
             break;
         }
     memory->_field[row][max] = player;
+    memory->_lastCol = row;
+    memory->_lastRow = max;
+    memory->_dropStart = IF_GetCurrentTime();
     return max;
 }
 
@@ -238,20 +247,34 @@ static void CalculateAIMove()
             }
         }
     }
-    // drop a random piece
-    uint8_t rand = IF_Random() & 0x07;
-    uint8_t pos = 0;
-    while (1)
+    /* otherwise play towards the middle, but never into a column where the
+       stone would hand the opponent an immediate win right on top of it */
+    static const uint8_t order[7] = { 3, 2, 4, 1, 5, 0, 6 };
+    uint8_t fallback = 7;
+    for (uint8_t k = 0; k < 7; k++)
     {
-        if (memory->_field[pos][0] == C4_EMPTY)
+        uint8_t col = order[k];
+        int16_t row = Drop(memory->_playerAI, col);
+        if (row == -1)
+            continue;
+        if (fallback == 7)
+            fallback = col;
+        uint8_t givesWin = 0;
+        int16_t row2 = Drop(p1, col);
+        if (row2 != -1)
         {
-            if (!rand)
-                break;
-            rand--;
+            givesWin = (uint8_t)(CheckWinner() == p1);
+            memory->_field[col][row2] = C4_EMPTY;
         }
-        pos = (pos+1)%7;
+        memory->_field[col][row] = C4_EMPTY;
+        if (!givesWin)
+        {
+            Drop(memory->_playerAI, col);
+            return;
+        }
     }
-    Drop(memory->_playerAI, pos);
+    if (fallback != 7)
+        Drop(memory->_playerAI, fallback);
 }
 
 
@@ -260,57 +283,74 @@ static void CalculateAIMove()
 #define RESET_BUTTON_X (S2_CENTER_X - RESET_BUTTON_W/2)
 #define RESET_BUTTON_Y (S2_CENTER_Y + 30)
 
+#define BLOCK_SIZE ( (GPU_X/2 < GPU_Y) ? GPU_X/14 : GPU_Y/7 )
+#define START_X (GPU_X/2 - 7*BLOCK_SIZE)/2
+#define START_Y (GPU_Y - 7*BLOCK_SIZE)/2
+
+/* keys and touch are polled every main loop iteration, not only on the slow
+   AI tick, so that moving the selector feels instant */
+static void HandleHumanInput(void)
+{
+    KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
+    if (keyboard & KEY_LEFT)
+    {
+        if (memory->_choicePosition > 0)
+            memory->_choicePosition--;
+    }
+    if (keyboard & KEY_RIGHT)
+    {
+        if (memory->_choicePosition < 6)
+            memory->_choicePosition++;
+    }
+    uint8_t drop = (keyboard & KEY_DOWN) ? 1 : 0;
+    /* tapping a column drops the stone there */
+    uint16_t tx, ty;
+    if (Touch_TakeTap(&tx, &ty))
+    {
+        if (tx < GPU_X/2)
+        {
+            int32_t col = ((int32_t)tx - START_X)/BLOCK_SIZE;
+            if (col < 0) col = 0;
+            if (col > 6) col = 6;
+            memory->_choicePosition = (uint8_t)col;
+            drop = 1;
+        }
+    }
+    if (drop)
+    {
+        if (Drop(memory->_playerNext, memory->_choicePosition) != -1)
+        {
+            memory->_playerNext = TogglePlayer(memory->_playerNext);
+            if (CheckWinner() != C4_EMPTY)
+                mainMemory._gameState = GS_DONE;
+        }
+    }
+}
 
 static void G_Update(void)
 {
+    if (mainMemory._gameState == GS_RUNNING && memory->_playerNext != memory->_playerAI)
+        HandleHumanInput();
+    else if (mainMemory._gameState == GS_RUNNING)
+    {
+        /* while the computer thinks, drop any input so it cannot leak into
+           the player's next turn as a surprise move */
+        Keyboard_GetPressedKeys();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     while (mainMemory._lastRenderedTick < tick)
     {
+        mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
             break;
-        C4Enum gameOver;
         if (memory->_playerNext == memory->_playerAI)
         {
             CalculateAIMove();
             memory->_playerNext = TogglePlayer(memory->_playerNext);
-            gameOver = CheckWinner();
-            if (gameOver != C4_EMPTY)
-            {
+            if (CheckWinner() != C4_EMPTY)
                 mainMemory._gameState = GS_DONE;
-            }
         }
-        else
-        {
-            KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
-            if (keyboard != KEY_NONE)
-            {
-                if (keyboard & KEY_LEFT)
-                {
-                    if (memory->_choicePosition > 0)
-                        memory->_choicePosition--;
-                }
-                if (keyboard & KEY_RIGHT)
-                {
-                    if (memory->_choicePosition < 6)
-                        memory->_choicePosition++;
-                }
-                if (keyboard & KEY_DOWN)
-                {
-                    // drop and change player
-                    if (Drop(memory->_playerNext, memory->_choicePosition) != -1)
-                    {
-                        memory->_playerNext = TogglePlayer(memory->_playerNext);
-                    }
-                    gameOver = CheckWinner();
-                    if (gameOver != C4_EMPTY)
-                    {
-                        mainMemory._gameState = GS_DONE;
-                    }
-                }
-                keyboard = KEY_NONE;
-            }
-        }
-        mainMemory._lastRenderedTick++;
     }
     if (mainMemory._gameState != GS_RUNNING)
 	{
@@ -322,10 +362,6 @@ static void G_Update(void)
 	}
 }
 
-#define BLOCK_SIZE ( (GPU_X/2 < GPU_Y) ? GPU_X/14 : GPU_Y/7 )
-#define START_X (GPU_X/2 - 7*BLOCK_SIZE)/2
-#define START_Y (GPU_Y - 7*BLOCK_SIZE)/2
-
 static void G_Draw(void)
 {
     const FontDescription * font_small = &fontDescription[0];
@@ -335,29 +371,38 @@ static void G_Draw(void)
     // Draw Board: a blue frame with a hole per cell
     GPU_DrawPanel(RGB(20,40,140), C_C1, (int16_t)(START_X-4), (int16_t)(START_Y+BLOCK_SIZE-5),
                   (int16_t)(7*BLOCK_SIZE+8), (int16_t)(6*BLOCK_SIZE+8));
+    uint32_t dropEl = IF_GetCurrentTime() - memory->_dropStart;
     for (uint8_t i=0; i<7; i++)
         for (uint8_t j=0; j<6; j++)
         {
             int16_t cx = (int16_t)(START_X + i*BLOCK_SIZE + BLOCK_SIZE/2);
             int16_t cy = (int16_t)(START_Y + j*BLOCK_SIZE + BLOCK_SIZE/2 + BLOCK_SIZE);
             GPU_DrawFilledCircle(RGB(6,8,24), cx, cy, (int16_t)(BLOCK_SIZE/2-2));
-            if (memory->_field[i][j]==C4_PLAYER_1)
+            C4Enum cell = memory->_field[i][j];
+            if (cell == C4_EMPTY)
+                continue;
+            /* the freshly dropped stone falls into place (time based, so the
+               animation lasts ~300ms no matter how fast the main loop spins) */
+            uint8_t anim = (uint8_t)(dropEl < 300000 && i == memory->_lastCol && j == memory->_lastRow &&
+                                     mainMemory._gameState == GS_RUNNING);
+            if (anim)
             {
-                GPU_DrawFilledCircle(C_YELLOW, cx, cy, (int16_t)(BLOCK_SIZE/2-3));
-                GPU_DrawPixel(RGB(255,255,220), (uint16_t)(cx-3), (uint16_t)(cy-3));
+                int16_t top = (int16_t)(START_Y - BLOCK_SIZE);
+                int32_t p = (int32_t)(dropEl * 256 / 300000);
+                int32_t eased = p*p/256;
+                cy = (int16_t)(top + (cy - top)*eased/256);
             }
-            else if (memory->_field[i][j]==C4_PLAYER_2)
-            {
-                GPU_DrawFilledCircle(C_RED, cx, cy, (int16_t)(BLOCK_SIZE/2-3));
-                GPU_DrawPixel(RGB(255,220,220), (uint16_t)(cx-3), (uint16_t)(cy-3));
-            }
+            GPU_Color pc = (cell == C4_PLAYER_1) ? C_YELLOW : C_RED;
+            if (!anim && i == memory->_lastCol && j == memory->_lastRow)
+                GPU_DrawGlow(pc, cx, cy, (int16_t)(BLOCK_SIZE/2));
+            GPU_DrawBall(pc, cx, cy, (int16_t)(BLOCK_SIZE/2-3));
         }
     // Draw Choice position
     if (mainMemory._gameState == GS_RUNNING)
     {
         GPU_Color turn = (memory->_playerNext == C4_PLAYER_1) ? C_YELLOW : C_RED;
         int16_t ax = (int16_t)(START_X + memory->_choicePosition*BLOCK_SIZE + BLOCK_SIZE/2);
-        GPU_DrawFilledCircle(turn, ax, (int16_t)(START_Y + BLOCK_SIZE/2), (int16_t)(BLOCK_SIZE/2-3));
+        GPU_DrawBall(turn, ax, (int16_t)(START_Y + BLOCK_SIZE/2), (int16_t)(BLOCK_SIZE/2-3));
         GPU_DrawFilledTriangle(turn, (int16_t)(ax-5), (int16_t)(START_Y+BLOCK_SIZE-4),
                                (int16_t)(ax+5), (int16_t)(START_Y+BLOCK_SIZE-4),
                                ax, (int16_t)(START_Y+BLOCK_SIZE+2));
@@ -366,9 +411,9 @@ static void G_Draw(void)
     GPU_DrawPanel(RGB(16,18,48), C_GRAY_DARK, (int16_t)(GPU_X/2+8), 8, (int16_t)(GPU_X/2-16), 52);
     {
         int16_t cx = (int16_t)(GPU_X/2+24);
-        GPU_DrawFilledCircle(memory->_playerAI == C4_PLAYER_1 ? C_YELLOW : C_RED, cx, 20, 7);
+        GPU_DrawBall(memory->_playerAI == C4_PLAYER_1 ? C_YELLOW : C_RED, cx, 20, 7);
         GPU_DrawText(C_GRAY_LIGHT, font_small, (int16_t)(cx+14), 16, "AI", 2);
-        GPU_DrawFilledCircle(memory->_playerAI == C4_PLAYER_1 ? C_RED : C_YELLOW, cx, 42, 7);
+        GPU_DrawBall(memory->_playerAI == C4_PLAYER_1 ? C_RED : C_YELLOW, cx, 42, 7);
         GPU_DrawText(C_GRAY_LIGHT, font_small, (int16_t)(cx+14), 38, "YOU", 3);
     }
     if (mainMemory._gameState != GS_DONE)
@@ -376,7 +421,10 @@ static void G_Draw(void)
         if (memory->_playerAI == memory->_playerNext)
             GPU_DrawTextCentered(C_RED, font_big, S2_CENTER_X, S2_CENTER_Y, "CALCULATING");
         else
+        {
             GPU_DrawTextCentered(C_GRAY_MEDIUM, font_big, S2_CENTER_X, S2_CENTER_Y, "YOUR TURN");
+            GPU_DrawTextCentered(C_GRAY_DARK, font_small, S2_CENTER_X, (int16_t)(S2_CENTER_Y+22), "LEFT/RIGHT + DOWN or tap");
+        }
     }
     else
     {

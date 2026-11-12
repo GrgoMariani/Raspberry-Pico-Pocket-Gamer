@@ -58,6 +58,7 @@ typedef struct {
     uint32_t _score;
     uint32_t _bonus;
     uint8_t _lives;
+    uint8_t _nearMiss;      /* ticks of the near-miss popup */
     TunnelState _state;
     uint8_t _stateTick;
 } Game19Memory;
@@ -89,9 +90,18 @@ static void StartRun(uint8_t keepScore)
         memory->_score = 0;
         memory->_bonus = 0;
     }
+    else
+    {
+        /* bank the whole score into the bonus: the distance part is about to
+           be reset to zero, and score = distance*2 + bonus, so without this
+           the player lost everything they had flown so far on every crash */
+        memory->_bonus = memory->_score;
+    }
     memory->_distance = 0;
     memory->_speed = FX(0.16);
-    memory->_playerAngle = ANG(90);
+    /* the ship rides at the BOTTOM of the tunnel (screen y grows downwards,
+       so angle 270 puts it below the centre, where the player expects it) */
+    memory->_playerAngle = ANG(270);
     memory->_roll = 0;
     memory->_rollDirection = 1;
     memory->_rollSwitch = 900;
@@ -107,12 +117,15 @@ static void G_Init(void)
 {
     memset(memory, 0, sizeof(Game19Memory));
     memory->_lives = TR_START_LIVES;
+    Touch_ClearTap();
     StartRun(0);
 }
 
 static uint8_t SegmentBlocked(const Obstacle * o, uint8_t segment)
 {
-    uint8_t offset = (uint8_t)((segment - o->gapStart) & (TR_SEGMENTS-1));
+    /* TR_SEGMENTS is 12, not a power of two: a bit mask would wrap wrong and
+       let the player fly through segments that are drawn as solid wall */
+    uint8_t offset = (uint8_t)((segment + TR_SEGMENTS - o->gapStart) % TR_SEGMENTS);
     return (uint8_t)(offset >= o->gapWidth);
 }
 
@@ -126,6 +139,8 @@ static void Crash(void)
 
 static void Tick(void)
 {
+    if (memory->_nearMiss)
+        memory->_nearMiss--;
     switch (memory->_state)
     {
     case TS_READY:
@@ -139,10 +154,13 @@ static void Tick(void)
     case TS_FLYING:
     {
         KeyPressedEnum held = Keyboard_GetHeldKeys();
+        /* At the bottom of the tunnel a SMALLER angle moves the ship left on
+           screen and a bigger one moves it right. The old mapping turned the
+           other way round, so LEFT steered right - it felt reversed. */
         if ((held & KEY_LEFT) || (mainMemory.touchPressed && mainMemory.touch_X < GPU_X/2))
-            memory->_playerAngle += TR_STEP;
-        if ((held & KEY_RIGHT) || (mainMemory.touchPressed && mainMemory.touch_X >= GPU_X/2))
             memory->_playerAngle -= TR_STEP;
+        if ((held & KEY_RIGHT) || (mainMemory.touchPressed && mainMemory.touch_X >= GPU_X/2))
+            memory->_playerAngle += TR_STEP;
         memory->_playerAngle &= (ANG_FULL-1);
 
         memory->_distance += memory->_speed;
@@ -178,6 +196,13 @@ static void Tick(void)
                     return;
                 }
                 memory->_bonus += 50;
+                /* squeezing past the edge of the gap is worth extra */
+                if (SegmentBlocked(o, (uint8_t)((segment + 1) % TR_SEGMENTS)) ||
+                    SegmentBlocked(o, (uint8_t)((segment + TR_SEGMENTS - 1) % TR_SEGMENTS)))
+                {
+                    memory->_bonus += 25;
+                    memory->_nearMiss = 30;
+                }
             }
             if (o->z < FX(1.0))
             {
@@ -224,6 +249,13 @@ static void ResetButtonTouched(void)
 
 static void G_Update(void)
 {
+    /* check the reset button every main loop iteration, a touch press edge
+       only lives for one iteration and would be missed between two ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
         mainMemory._lastRenderedTick = tick - 4*NUM_TICKS;
@@ -231,10 +263,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -314,7 +343,9 @@ static void G_Draw(void)
         }
     }
 
-    /* obstacles: a wall with a gap, drawn as a grid so that it stays cheap */
+    /* obstacles: a solid wall with a gap. Each blocked segment is filled as a
+       coloured quad so it is obvious where the wall is (the old wireframe grid
+       was hard to read). */
     for (uint8_t i = 0; i < TR_OBSTACLES; i++)
     {
         Obstacle * o = &memory->_obstacles[i];
@@ -322,6 +353,7 @@ static void G_Draw(void)
             continue;
         int32_t depth = FX_TO_INT(o->z);
         GPU_Color color = GPU_ShadeColor(o->color, (int16_t)(255 - depth*5));
+        GPU_Color edge = GPU_BlendColor(color, C_WHITE, 130);
         Ring outer, inner;
         ProjectRing(&outer, TR_RADIUS, o->z);
         ProjectRing(&inner, TR_INNER, o->z);
@@ -330,12 +362,25 @@ static void G_Draw(void)
             if (!SegmentBlocked(o, s))
                 continue;
             uint8_t s2 = (uint8_t)(s+1);
-            if (outer.ok[s] && outer.ok[s2])
-                GPU_DrawLine(color, outer.x[s], outer.y[s], outer.x[s2], outer.y[s2]);
-            if (inner.ok[s] && inner.ok[s2])
-                GPU_DrawLine(GPU_ShadeColor(color, 170), inner.x[s], inner.y[s], inner.x[s2], inner.y[s2]);
-            if (outer.ok[s] && inner.ok[s])
-                GPU_DrawLine(color, outer.x[s], outer.y[s], inner.x[s], inner.y[s]);
+            if (outer.ok[s] && outer.ok[s2] && inner.ok[s] && inner.ok[s2])
+            {
+                int16_t sx[4] = { outer.x[s], outer.x[s2], inner.x[s2], inner.x[s] };
+                int16_t sy[4] = { outer.y[s], outer.y[s2], inner.y[s2], inner.y[s] };
+                GPU_DrawConvexPolygon(color, sx, sy, 4);
+                /* bright rim on the edge facing the player */
+                GPU_DrawLine(edge, inner.x[s], inner.y[s], inner.x[s2], inner.y[s2]);
+                GPU_DrawLine(GPU_BlendColor(color, C_WHITE, 60), outer.x[s], outer.y[s], outer.x[s2], outer.y[s2]);
+            }
+            else
+            {
+                /* a corner is behind the camera: fall back to the outline */
+                if (outer.ok[s] && outer.ok[s2])
+                    GPU_DrawLine(color, outer.x[s], outer.y[s], outer.x[s2], outer.y[s2]);
+                if (inner.ok[s] && inner.ok[s2])
+                    GPU_DrawLine(edge, inner.x[s], inner.y[s], inner.x[s2], inner.y[s2]);
+                if (outer.ok[s] && inner.ok[s])
+                    GPU_DrawLine(color, outer.x[s], outer.y[s], inner.x[s], inner.y[s]);
+            }
         }
     }
 
@@ -359,6 +404,14 @@ static void G_Draw(void)
     }
     else
     {
+        /* a neon glow behind the ship */
+        {
+            Vec3 cam;
+            int16_t gx, gy;
+            GPU3D_WorldToCamera(&pos, &cam);
+            if (GPU3D_Project(&cam, &gx, &gy))
+                GPU_DrawGlow(C_CYAN, gx, gy, 12);
+        }
         /* the pyramid is turned so that its tip points into the tunnel */
         GPU3D_DrawMeshTinted(&GPU3D_PyramidMesh, &pos, NULL, ANG(90), 0,
                              (int32_t)(memory->_playerAngle - ANG(90)), C_WHITE, 0);
@@ -394,6 +447,8 @@ static void G_Draw(void)
         GPU_DrawButton(C_YELLOW, C_BLACK, fb, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
                        RESET_BUTTON_W, RESET_BUTTON_H);
     }
+    if (memory->_nearMiss)
+        GPU_DrawTextOutlined(C_C3, C_BLACK, fm, GPU_X/2, (int16_t)(GPU_Y/2-40), "NEAR MISS +25");
 }
 
 static void G_Deinit(void)

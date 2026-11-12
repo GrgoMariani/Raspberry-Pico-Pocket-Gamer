@@ -24,8 +24,10 @@ typedef enum {
 } Tetramino;
 
 typedef struct {
-    Mino _field[20][10];
+    /* field cells: 0 = empty, 1..7 = locked piece of that colour index + 1 */
+    uint8_t _field[20][10];
     uint32_t _score;
+    uint32_t _lines;
     Mino _activeTetramino[4][4];
     uint8_t _activeWH;
     Mino _nextTetramino[4][4];
@@ -34,6 +36,10 @@ typedef struct {
     int8_t _activeY;
     GPU_Color _activeColor;
     GPU_Color _nextColor;
+    uint8_t _activeColorIdx;
+    uint8_t _nextColorIdx;
+    uint8_t _clearFlash;      /* ticks remaining of the line-clear flash */
+    uint8_t _lastClear;       /* rows cleared by the last lock */
 } Game5Memory;
 
 /* one colour per shape, like the modern games do it */
@@ -66,6 +72,7 @@ static void _GenerateNextTetramino()
 {
     Tetramino randTetramino = GetRandomTetramino();
     memory->_nextColor = _pieceColor[randTetramino];
+    memory->_nextColorIdx = (uint8_t)randTetramino;
     for (uint8_t i=0; i<4; i++)
         for (uint8_t j=0; j<4; j++)
             memory->_nextTetramino[i][j] = TF_EMPTY;
@@ -127,7 +134,7 @@ static uint8_t _CheckCollision(int8_t x, int8_t y)
 {
     if (x<0 || y<0 || x>=10 || y>=20)
         return 1;
-    if (memory->_field[y][x] == TF_FULL)
+    if (memory->_field[y][x] != 0)
         return 1;
     return 0;
 }
@@ -139,6 +146,7 @@ static void _PushTetramino()
             memory->_activeTetramino[i][j] = memory->_nextTetramino[i][j];
     memory->_activeWH = memory->_nextWH;
     memory->_activeColor = memory->_nextColor;
+    memory->_activeColorIdx = memory->_nextColorIdx;
     memory->_activeX = 4;
     memory->_activeY = 0;
     _GenerateNextTetramino();
@@ -195,14 +203,14 @@ static void _NaturalFixActiveTetramino()
         for (uint8_t j=0; j<memory->_activeWH; j++)
         {
             if (memory->_activeTetramino[i][j] == TF_OBJECT)
-                memory->_field[memory->_activeY+j][memory->_activeX+i] = TF_FULL;
+                memory->_field[memory->_activeY+j][memory->_activeX+i] = (uint8_t)(memory->_activeColorIdx + 1);
         }
 }
 
 static uint8_t _CheckRow(uint8_t y)
 {
     for (int8_t i=0; i<10; i++)
-        if (memory->_field[y][i] == TF_EMPTY)
+        if (memory->_field[y][i] == 0)
             return 0;
     return 1;
 }
@@ -220,14 +228,14 @@ static void _CheckField()
                 for (int8_t k=0; k<10; k++)
                 {
                     memory->_field[j][k] = memory->_field[j-1][k];
-                    memory->_field[j-1][k] = TF_EMPTY;
+                    memory->_field[j-1][k] = 0;
                 }
             }
             if (i == 0)
             {
                 /* the top row has nothing above it to shift down */
                 for (int8_t k=0; k<10; k++)
-                    memory->_field[0][k] = TF_EMPTY;
+                    memory->_field[0][k] = 0;
             }
             else
             {
@@ -236,7 +244,43 @@ static void _CheckField()
             }
         }
     }
-    memory->_score += final_score*(final_score+1)/2;
+    memory->_lines += final_score;
+    /* 1/3/6/10 points for 1..4 rows, times the current level */
+    memory->_score += (uint32_t)(final_score*(final_score+1)/2) * (memory->_lines/10 + 1);
+    if (final_score)
+    {
+        memory->_clearFlash = 8;
+        memory->_lastClear = final_score;
+    }
+}
+
+/* the row the active piece would land on if dropped straight down */
+static int8_t _GhostY(void)
+{
+    int8_t gy = memory->_activeY;
+    while (gy < 20)
+    {
+        uint8_t hit = 0;
+        for (uint8_t i = 0; i < memory->_activeWH && !hit; i++)
+            for (uint8_t j = 0; j < memory->_activeWH && !hit; j++)
+                if (memory->_activeTetramino[i][j] == TF_OBJECT &&
+                    _CheckCollision((int8_t)(i + memory->_activeX), (int8_t)(j + gy + 1)))
+                    hit = 1;
+        if (hit)
+            break;
+        gy++;
+    }
+    return gy;
+}
+
+/* gravity speeds up with every ten cleared rows */
+static uint32_t _GravityInterval(void)
+{
+    uint32_t level = memory->_lines/10;
+    uint32_t interval = NUM_TICKS/2 - level;
+    if (interval < 2)
+        interval = 2;
+    return interval;
 }
 
 static void _DropTetramino()
@@ -247,6 +291,18 @@ static void _DropTetramino()
         _CheckField();
         _PushTetramino();
     }
+}
+
+/* instant drop to the ghost position, rewarding the player for the distance */
+static void _HardDrop(void)
+{
+    uint32_t cells = 0;
+    while (_MoveTetraminoDown())
+        cells++;
+    memory->_score += cells;
+    _NaturalFixActiveTetramino();
+    _CheckField();
+    _PushTetramino();
 }
 
 static void _RotateTetramino()
@@ -274,13 +330,27 @@ static void _RotateTetramino()
             rotated[i][j] = rotated[j][i];
             rotated[j][i] = temp;
         }
-    // Check for collisions
-    for (uint8_t i = 0; i<memory->_activeWH; i++)
-        for (uint8_t j=0; j<memory->_activeWH; j++)
-        {
-            if (rotated[i][j] == TF_OBJECT && _CheckCollision(i + memory->_activeX, j + memory->_activeY))
-                return;
-        }
+    /* check for collisions, with wall kicks: a piece that does not fit in
+       place is tried one and two cells to the left and to the right, so that
+       rotating next to a wall or the stack still works */
+    static const int8_t kicks[5] = { 0, -1, 1, -2, 2 };
+    uint8_t k;
+    for (k = 0; k < 5; k++)
+    {
+        uint8_t fits = 1;
+        for (uint8_t i = 0; i<memory->_activeWH && fits; i++)
+            for (uint8_t j=0; j<memory->_activeWH && fits; j++)
+            {
+                if (rotated[i][j] == TF_OBJECT &&
+                    _CheckCollision((int8_t)(i + memory->_activeX + kicks[k]), (int8_t)(j + memory->_activeY)))
+                    fits = 0;
+            }
+        if (fits)
+            break;
+    }
+    if (k == 5)
+        return;
+    memory->_activeX = (int8_t)(memory->_activeX + kicks[k]);
     for (uint8_t i=0; i<4; i++)
         for (uint8_t j=0; j<4; j++)
         {
@@ -293,11 +363,16 @@ static void G_Init(void)
     mainMemory._gameState = GS_RUNNING;
     for (uint8_t i=0; i<20; i++)
         for (uint8_t j=0; j<10; j++)
-            memory->_field[i][j] = TF_EMPTY;
+            memory->_field[i][j] = 0;
     memory->_score = 0;
+    memory->_lines = 0;
+    memory->_clearFlash = 0;
+    memory->_lastClear = 0;
     mainMemory._lastRenderedTick = CalculateCurrentTick();
     memory->_activeX = 0;
     memory->_activeY = 0;
+    /* a key that was pressed before the reset must not move the new piece */
+    Keyboard_GetPressedKeys();
     _GenerateNextTetramino();
     _PushTetramino();
 }
@@ -314,6 +389,12 @@ static void G_Update(void)
 
     if (mainMemory._gameState == GS_RUNNING)
     {
+        /* a tap on the playfield hard-drops the piece */
+        uint16_t tx, ty;
+        if (Touch_TakeTap(&tx, &ty) && tx < GPU_X/2)
+            _HardDrop();
+        if (memory->_clearFlash)
+            memory->_clearFlash--;
         uint32_t tick = CalculateCurrentTick();
         while (mainMemory._lastRenderedTick < tick)
         {
@@ -343,8 +424,8 @@ static void G_Update(void)
             	keyboard_held = KEY_NONE;
             }
             
-            // on several ticks simply move it down
-            if (mainMemory._lastRenderedTick%(NUM_TICKS/2) == 0)
+            // on several ticks simply move it down, faster in higher levels
+            if (mainMemory._lastRenderedTick % _GravityInterval() == 0)
             {
                 if (!_MoveTetraminoDown())
                 {
@@ -380,23 +461,44 @@ static void G_Draw(void)
     for (uint8_t i=0; i<20; i++)
         for (uint8_t j=0; j<10; j++)
         {
-            if (memory->_field[i][j] == TF_EMPTY)
+            if (memory->_field[i][j] == 0)
             {
                 GPU_DrawPixel(RGB(40,44,64), (uint16_t)(START_X + BLOCK_SIZE*j + BLOCK_SIZE/2),
                               (uint16_t)(START_Y + BLOCK_SIZE*i + BLOCK_SIZE/2));
             }
-            else if (memory->_field[i][j] == TF_FULL)
+            else
             {
-                GPU_DrawBevelSquare(C_GRAY_MEDIUM, START_X + BLOCK_SIZE*j, START_Y + BLOCK_SIZE*i, BLOCK_SIZE-1, BLOCK_SIZE-1);
+                GPU_DrawBevelSquare(_pieceColor[memory->_field[i][j]-1], START_X + BLOCK_SIZE*j, START_Y + BLOCK_SIZE*i, BLOCK_SIZE-1, BLOCK_SIZE-1);
             }
         }
-    // Draw current
+    // Draw ghost (landing preview) then the current piece
+    if (mainMemory._gameState == GS_RUNNING)
+    {
+        int8_t gy = _GhostY();
+        if (gy > memory->_activeY)
+        {
+            GPU_Color ghost = GPU_ShadeColor(memory->_activeColor, 70);
+            for (uint8_t i=0; i<memory->_activeWH; i++)
+                for (uint8_t j=0; j<memory->_activeWH; j++)
+                    if (memory->_activeTetramino[i][j] == TF_OBJECT)
+                        GPU_DrawEmptySquare(ghost, START_X + BLOCK_SIZE*(i + memory->_activeX), START_Y + BLOCK_SIZE*(j + gy), BLOCK_SIZE-1, BLOCK_SIZE-1);
+        }
+    }
     for (uint8_t i=0; i<memory->_activeWH; i++)
         for (uint8_t j=0; j<memory->_activeWH; j++)
         {
             if (memory->_activeTetramino[i][j] == TF_OBJECT)
                 GPU_DrawBevelSquare(memory->_activeColor, START_X + BLOCK_SIZE*(i + memory->_activeX), START_Y + BLOCK_SIZE*(j + memory->_activeY), BLOCK_SIZE-1, BLOCK_SIZE-1);
         }
+    /* line-clear flash across the field */
+    if (memory->_clearFlash)
+    {
+        GPU_Color flash = GPU_ShadeColor(C_WHITE, (int16_t)(memory->_clearFlash*28));
+        GPU_DrawEmptySquare(flash, (int16_t)(START_X-1), (int16_t)(START_Y-1), 10*BLOCK_SIZE+2, 20*BLOCK_SIZE+2);
+        char clr[12];
+        sprintf(clr, "CLEAR x%u", (unsigned)memory->_lastClear);
+        GPU_DrawTextOutlined(C_YELLOW, C_BLACK, f, S1_CENTER_X, (int16_t)(START_Y+4), clr);
+    }
     // Draw next
     GPU_DrawPanel(RGB(16,18,48), C_GRAY_DARK, (int16_t)(GPU_X/2+8), 8, (int16_t)(GPU_X/2-16), 70);
     const char * txtNextOne = "NEXT";
@@ -408,12 +510,17 @@ static void G_Draw(void)
                 GPU_DrawBevelSquare(memory->_nextColor, (int16_t)(GPU_X/2+START_X+BLOCK_SIZE*j), (int16_t)(28+BLOCK_SIZE*i), BLOCK_SIZE-1, BLOCK_SIZE-1);
         }
     // Draw score
-    GPU_DrawPanel(RGB(16,18,48), C_GRAY_DARK, (int16_t)(GPU_X/2+8), 86, (int16_t)(GPU_X/2-16), 54);
+    GPU_DrawPanel(RGB(16,18,48), C_GRAY_DARK, (int16_t)(GPU_X/2+8), 86, (int16_t)(GPU_X/2-16), 92);
     const char * txtScore = "SCORE";
     GPU_DrawTextCentered(C_GRAY_LIGHT, f, (int16_t)(GPU_X*3/4), 92, txtScore);
-    char txtScoreInt[12];
+    char txtScoreInt[24];
     sprintf(txtScoreInt, "%u", (unsigned)memory->_score);
     GPU_DrawTextCentered(C_C1, f, (int16_t)(GPU_X*3/4), 110, txtScoreInt);
+    sprintf(txtScoreInt, "LEVEL %u", (unsigned)(memory->_lines/10 + 1));
+    GPU_DrawTextCentered(C_GRAY_LIGHT, f, (int16_t)(GPU_X*3/4), 132, txtScoreInt);
+    sprintf(txtScoreInt, "LINES %u", (unsigned)memory->_lines);
+    GPU_DrawTextCentered(C_GRAY_MEDIUM, f, (int16_t)(GPU_X*3/4), 150, txtScoreInt);
+    GPU_DrawTextCentered(C_GRAY_DARK, &fontDescription[0], (int16_t)(GPU_X*3/4), 168, "tap field = drop");
     if (mainMemory._gameState == GS_DONE)
     {
         const FontDescription * f_big = &fontDescription[3];

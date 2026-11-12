@@ -28,8 +28,18 @@ typedef struct {
 
 static int16_t field[SNAKE_W][SNAKE_H];
 static Direction direction;
+/* up to two pending turns: a quick "up then left" used to lose the first turn
+   because only the last key of a tick was applied (and a reversal is rejected),
+   which sent the snake straight into the wall it was trying to avoid */
+static Direction dirQueue[2];
+static uint8_t dirQueueN = 0;
 static SnakeObject fruit1, fruit2, head;
+static SnakeObject fruitGold;      /* rare bonus fruit, worth +3 */
+static uint32_t goldNextSpawn;
 static uint32_t lastMovedTick;
+/* the record lives outside of the shared memory so that it survives a visit
+   to another game */
+static uint16_t bestLength = 0;
 
 
 static int16_t Reduce(int16_t prev)
@@ -60,6 +70,25 @@ static void _GenerateRandomFruit()
 	}
 }
 
+/* the golden fruit appears on its own schedule and is worth three segments */
+static void _SpawnGoldFruit()
+{
+	uint32_t t = IF_GetCurrentTime();
+	for (uint8_t attempt = 0; attempt < 20; attempt++)
+	{
+		uint8_t x = (uint8_t)(1 + Random_Range(SNAKE_W-2));
+		uint8_t y = (uint8_t)(1 + Random_Range(SNAKE_H-2));
+		if (!field[x][y] && !(x==head.x && y==head.y))
+		{
+			fruitGold.x = x;
+			fruitGold.y = y;
+			fruitGold.dissapearTime = t + 6*ONE_SECOND;
+			return;
+		}
+	}
+	fruitGold.dissapearTime = 0;
+}
+
 static void ChangeDirection(Direction newDirection)
 {
 	/* the cell the head came from holds head.dissapearTime-1: turning into it
@@ -74,6 +103,16 @@ static void ChangeDirection(Direction newDirection)
 	if (newDirection == D_DOWN && head.y+1 < SNAKE_H && field[head.x][head.y+1] == neck)
 		return;
 	direction = newDirection;
+}
+
+/* buffer a turn; it is applied one per snake step, in order */
+static void QueueDirection(Direction d)
+{
+	Direction last = dirQueueN ? dirQueue[dirQueueN-1] : direction;
+	if (d == last)
+		return;
+	if (dirQueueN < 2)
+		dirQueue[dirQueueN++] = d;
 }
 
 static void MoveSnakeOnce()
@@ -114,6 +153,12 @@ static void MoveSnakeOnce()
 		fruit2.dissapearTime = 0;
 		grew = 1;
 	}
+	if (head.x == fruitGold.x && head.y == fruitGold.y && t<fruitGold.dissapearTime)
+	{
+		head.dissapearTime += 3;
+		fruitGold.dissapearTime = 0;
+		grew = 1;
+	}
 	if (!grew)
 	{
 		for (uint8_t i=0; i<SNAKE_W; i++)
@@ -123,6 +168,9 @@ static void MoveSnakeOnce()
 			}
 	}
 	field[head.x][head.y] = head.dissapearTime;
+	/* remember the record as soon as it grows, so a MENU reset does not lose it */
+	if (grew && head.dissapearTime > bestLength)
+		bestLength = (uint16_t)head.dissapearTime;
 }
 
 static uint32_t CalculateTick()
@@ -140,13 +188,18 @@ static void G_Init(void)
     	}
     fruit1 = (SnakeObject){0, 0, 0};
     fruit2 = (SnakeObject){0, 0, 0};
+    fruitGold = (SnakeObject){0, 0, 0};
+    goldNextSpawn = IF_GetCurrentTime() + 10*ONE_SECOND;
     field[SNAKE_W/2][SNAKE_H/2] = 3;
     field[SNAKE_W/2+1][SNAKE_H/2] = 2;
     field[SNAKE_W/2+2][SNAKE_H/2] = 1;
     head = (SnakeObject){SNAKE_W/2, SNAKE_H/2, 3};
     mainMemory._lastRenderedTick = CalculateTick();
     direction = D_LEFT;
+    dirQueueN = 0;
     lastMovedTick = 0;
+    Keyboard_GetPressedKeys();
+    Touch_ClearTap();
     _GenerateRandomFruit();
 }
 
@@ -165,18 +218,28 @@ static void G_Init(void)
 #define BLOCK_H ((END_Y-START_Y)/SNAKE_H)
 
 /* tap into the direction the snake should turn */
-static void TouchSteer(void)
+static void TouchSteer(uint16_t touchX, uint16_t touchY)
 {
 	int32_t hx = START_X + head.x*BLOCK_W + BLOCK_W/2;
 	int32_t hy = START_Y + head.y*BLOCK_H + BLOCK_H/2;
-	int32_t dx = (int32_t)mainMemory.touch_X - hx;
-	int32_t dy = (int32_t)mainMemory.touch_Y - hy;
+	int32_t dx = (int32_t)touchX - hx;
+	int32_t dy = (int32_t)touchY - hy;
 	if (dx*dx + dy*dy < 64)
 		return;
 	if ((dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx))
-		ChangeDirection((dy < 0) ? D_UP : D_DOWN);
+		QueueDirection((dy < 0) ? D_UP : D_DOWN);
 	else
-		ChangeDirection((dx < 0) ? D_LEFT : D_RIGHT);
+		QueueDirection((dx < 0) ? D_LEFT : D_RIGHT);
+}
+
+/* the snake speeds up as it grows: 7.5 cells/s at the start, up to 15 */
+static uint32_t MoveInterval(void)
+{
+	uint32_t len = head.dissapearTime;
+	uint32_t faster = (len > 3) ? (len-3)/8 : 0;
+	if (faster > 2)
+		faster = 2;
+	return 4 - faster;
 }
 
 static void G_Update(void)
@@ -198,27 +261,49 @@ static void G_Update(void)
     	{
     		_GenerateRandomFruit();
     	}
+    	{
+    		uint32_t now = IF_GetCurrentTime();
+    		if (fruitGold.dissapearTime == 0 && now >= goldNextSpawn)
+    		{
+    			_SpawnGoldFruit();
+    			goldNextSpawn = now + 20*ONE_SECOND;
+    		}
+    	}
 
         mainMemory._lastRenderedTick++;
-        if (mainMemory._lastRenderedTick - lastMovedTick > 3)
+        if (mainMemory._lastRenderedTick - lastMovedTick >= MoveInterval())
         {
+        	if (dirQueueN)
+        	{
+        		ChangeDirection(dirQueue[0]);
+        		dirQueue[0] = dirQueue[1];
+        		dirQueueN--;
+        	}
         	MoveSnakeOnce();
         	lastMovedTick = mainMemory._lastRenderedTick;
+        	if (mainMemory._gameState == GS_DONE)
+        	{
+        		if (head.dissapearTime > bestLength)
+        			bestLength = (uint16_t)head.dissapearTime;
+        		return;
+        	}
         }
         if (keyboard != KEY_NONE)
         {
         	if (keyboard & KEY_LEFT)
-        		ChangeDirection(D_LEFT);
+        		QueueDirection(D_LEFT);
 			else if (keyboard & KEY_UP)
-        		ChangeDirection(D_UP);
+        		QueueDirection(D_UP);
 			else if (keyboard & KEY_RIGHT)
-				ChangeDirection(D_RIGHT);
+				QueueDirection(D_RIGHT);
 			else if (keyboard & KEY_DOWN)
-				ChangeDirection(D_DOWN);
+				QueueDirection(D_DOWN);
 			keyboard = KEY_NONE;
         }
-        if (mainMemory.touchPressedNew)
-        	TouchSteer();
+        /* the tap latch delivers every press, even between two ticks */
+        uint16_t tx, ty;
+        if (Touch_TakeTap(&tx, &ty))
+        	TouchSteer(tx, ty);
     }
 }
 
@@ -231,6 +316,7 @@ static void DrawFruit(const SnakeObject * fruit, GPU_Color color, uint32_t t)
 	/* blink shortly before it disappears */
 	if (fruit->dissapearTime - t < ONE_SECOND/2 && (t/(ONE_SECOND/8)) & 1)
 		color = GPU_ShadeColor(color, 140);
+	GPU_DrawGlow(color, cx, cy, (int16_t)(BLOCK_W/2+2));
 	GPU_DrawFilledCircle(color, cx, cy, (int16_t)(BLOCK_W/2-1));
 	GPU_DrawPixel(RGB(255,255,255), (uint16_t)(cx-2), (uint16_t)(cy-2));
 }
@@ -265,11 +351,17 @@ static void G_Draw(void)
     }
     DrawFruit(&fruit1, C_BLUE, t);
     DrawFruit(&fruit2, C_RED, t);
+    DrawFruit(&fruitGold, C_YELLOW, t);
 
     /* score */
-    char text[16];
+    char text[24];
     sprintf(text, "LENGTH %u", length);
     GPU_DrawText(C_WHITE, fm, 12, 10, text, (uint16_t)strlen(text));
+    if (bestLength)
+    {
+        sprintf(text, "BEST %u", (unsigned)bestLength);
+        GPU_DrawText(C_GRAY_MEDIUM, fm, (int16_t)(GPU_X - 12 - strlen(text)*fm->width), 10, text, (uint16_t)strlen(text));
+    }
 
     if (mainMemory._gameState == GS_DONE)
     {

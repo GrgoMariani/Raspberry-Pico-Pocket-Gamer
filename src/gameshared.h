@@ -61,6 +61,13 @@ KeyPressedEnum Keyboard_GetHeldKeys();
  * and lightly filters jitter while the finger keeps touching the panel.
  */
 void Touch_Update(uint8_t pressed, uint16_t x, uint16_t y);
+/* Tap latch: touchPressedNew is only set during the single main loop cycle a
+   touch starts, but most games run their logic on a slower tick and would
+   miss the edge. Touch_Update() therefore also stores every press in a latch
+   that survives until a game takes it with Touch_TakeTap(). Use this inside
+   tick loops instead of touchPressedNew. */
+uint8_t Touch_TakeTap(uint16_t * x, uint16_t * y);
+void Touch_ClearTap(void);
 
 /*
  * Pseudo random numbers

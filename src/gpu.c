@@ -243,6 +243,11 @@ void GPU_DrawEmptyCircle(GPU_Color color, int16_t x, int16_t y, int16_t radius)
 {
     if (radius < 0)
         return;
+    if (radius == 0)
+    {
+        GPU_DrawPixel(color, x, y);
+        return;
+    }
     uint16_t xd = 0, yd = (uint16_t)radius;
     int16_t d = 3 - 2 * radius;
     GPU_DrawPixel(color, x+xd, y+yd);
@@ -278,9 +283,18 @@ void GPU_DrawFilledCircle(GPU_Color color, int16_t x, int16_t y, int16_t radius)
 {
     if (radius < 0)
         return;
+    if (radius == 0)
+    {
+        GPU_DrawPixel(color, x, y);
+        return;
+    }
     uint16_t xd = 0, yd = (uint16_t)radius;
     int16_t d = 3 - 2 * radius;
-    GPU_DrawLine(color, x, y-yd, x, y+yd);
+    /* Seed the MIDDLE ROW with a full horizontal span. The loop below always
+       increments xd before drawing, so the row y+0 is never emitted there -
+       a vertical seed line used to leave a one pixel horizontal gap straight
+       through the centre of every filled circle. */
+    GPU_DrawLine(color, x-yd, y, x+yd, y);
     while (yd >= xd)
     {
         xd++;
@@ -306,11 +320,19 @@ GPU_Color GPU_ShadeColor(GPU_Color color, int16_t level)
 {
     if (level <= 0)
         return C_BLACK;
-    if (level >= 256)
+    if (level == 256)
         return color;
     int16_t r = (int16_t)((uint16_t)GPU_GET_R5(color) * (uint16_t)level) >> 8;
     int16_t g = (int16_t)((uint16_t)GPU_GET_G6(color) * (uint16_t)level) >> 8;
     int16_t b = (int16_t)((uint16_t)GPU_GET_B5(color) * (uint16_t)level) >> 8;
+    if (level > 256)
+    {
+        /* brighten towards white, saturating each channel at its maximum.
+           The bevel helper uses this for the lit top/left edge of a button. */
+        if (r > 31) r = 31;
+        if (g > 63) g = 63;
+        if (b > 31) b = 31;
+    }
     return GPU_PACK_RGB565(r, g, b);
 }
 
@@ -432,6 +454,140 @@ void GPU_DrawButton(GPU_Color color, GPU_Color textColor, const FontDescription 
 {
     GPU_DrawBevelSquare(color, x, y, width, height);
     GPU_DrawTextCentered(textColor, font, x + width/2, y + (height - font->height)/2, text);
+}
+
+///////////////////////////////////////////////
+// Cheap, targeted visual effects
+///////////////////////////////////////////////
+
+void GPU_DrawStarfield(uint32_t seed, uint8_t count, uint32_t time)
+{
+    GPU_DrawStarfieldIn(seed, count, time, GPU_X, GPU_Y);
+}
+
+void GPU_DrawStarfieldIn(uint32_t seed, uint8_t count, uint32_t time, int16_t w, int16_t h)
+{
+    if (w <= 0 || h <= 0)
+        return;
+    for (uint8_t i = 0; i < count; i++)
+    {
+        uint32_t hh = ((uint32_t)i + seed) * 2654435761u;
+        int16_t x = (int16_t)((hh >> 7) % (uint32_t)w);
+        int16_t y = (int16_t)((hh >> 17) % (uint32_t)h);
+        /* each star twinkles on its own phase */
+        uint32_t phase = ((hh >> 3) & 0xff) + (time / 150000);
+        uint8_t bright = (uint8_t)(phase & 0x3f);
+        GPU_Color c;
+        if (bright < 8)
+            c = C_GRAY_DARK;
+        else if (bright < 24)
+            c = C_GRAY_MEDIUM;
+        else
+            c = C_GRAY_LIGHT;
+        GPU_DrawPixel(c, (uint16_t)x, (uint16_t)y);
+        /* a few rare stars are a little bigger and tinted */
+        if ((hh & 0x1f) == 0)
+        {
+            GPU_DrawPixel(C_WHITE, (uint16_t)(x+1), (uint16_t)y);
+            GPU_DrawPixel(c, (uint16_t)x, (uint16_t)(y+1));
+        }
+    }
+}
+
+void GPU_DrawGlow(GPU_Color color, int16_t x, int16_t y, int16_t radius)
+{
+    if (radius <= 0)
+        return;
+    /* outer dim halo -> inner bright halo; the caller draws the core on top */
+    GPU_DrawFilledCircle(GPU_ShadeColor(color, 40), x, y, radius);
+    GPU_DrawFilledCircle(GPU_ShadeColor(color, 80), x, y, (int16_t)(radius*3/4));
+    GPU_DrawFilledCircle(GPU_ShadeColor(color, 140), x, y, (int16_t)(radius/2));
+    GPU_DrawFilledCircle(GPU_ShadeColor(color, 200), x, y, (int16_t)(radius/4));
+}
+
+void GPU_DrawBall(GPU_Color color, int16_t x, int16_t y, int16_t radius)
+{
+    if (radius < 0)
+        return;
+    if (radius <= 3)
+    {
+        /* too small for a shading gradient: a bright pixel towards the light
+           is enough to keep it from looking like a flat dot */
+        GPU_DrawFilledCircle(color, x, y, radius);
+        if (radius >= 1)
+            GPU_DrawPixel(GPU_BlendColor(color, C_WHITE, 170), (uint16_t)(x-radius/2), (uint16_t)(y-radius/2));
+        return;
+    }
+    /* The light sits top left. Every layer is a circle shifted towards it,
+       so a crescent of the darker layer below stays visible on the lower
+       right - that crescent is what makes the disc read as a sphere. */
+    int16_t shift = (int16_t)(radius/4);
+    if (shift < 1)
+        shift = 1;
+    GPU_DrawFilledCircle(GPU_ShadeColor(color, 100), x, y, radius);
+    GPU_DrawFilledCircle(GPU_ShadeColor(color, 185), (int16_t)(x-shift), (int16_t)(y-shift), (int16_t)(radius-shift));
+    GPU_DrawFilledCircle(color, (int16_t)(x-shift), (int16_t)(y-shift), (int16_t)(radius-2*shift));
+    /* soft highlight plus a tiny specular dot */
+    {
+        int16_t hr = (int16_t)(radius/4);
+        if (hr < 1)
+            hr = 1;
+        GPU_DrawFilledCircle(GPU_BlendColor(color, C_WHITE, 150), (int16_t)(x-2*shift), (int16_t)(y-2*shift), hr);
+        if (radius >= 6)
+            GPU_DrawPixel(GPU_BlendColor(color, C_WHITE, 220), (uint16_t)(x-2*shift), (uint16_t)(y-2*shift));
+    }
+}
+
+void GPU_DrawSprite(const uint16_t * rows, uint8_t width, uint8_t height,
+                    int16_t x, int16_t y, GPU_Color color, uint8_t scale)
+{
+    if (scale == 0)
+        scale = 1;
+    for (uint8_t r = 0; r < height; r++)
+    {
+        uint16_t bits = rows[r];
+        for (uint8_t c = 0; c < width; c++)
+        {
+            if (bits & (1u << (15 - c)))
+            {
+                if (scale == 1)
+                    GPU_DrawPixel(color, (uint16_t)(x+c), (uint16_t)(y+r));
+                else
+                    GPU_DrawFilledSquare(color, (int16_t)(x+c*scale), (int16_t)(y+r*scale), scale, scale);
+            }
+        }
+    }
+}
+
+void GPU_DrawBurst(int16_t x, int16_t y, uint8_t t, uint8_t maxT, GPU_Color color)
+{
+    if (maxT == 0 || t >= maxT)
+        return;
+    /* 8 sparks on the compass directions, moving outwards and fading */
+    static const int8_t dx[8] = { 1, 1, 0, -1, -1, -1, 0, 1 };
+    static const int8_t dy[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+    int16_t dist = (int16_t)(2 + (int16_t)t * 3);
+    int16_t level = (int16_t)(256 - (int16_t)t * 256 / maxT);
+    GPU_Color c = GPU_ShadeColor(color, level);
+    for (uint8_t i = 0; i < 8; i++)
+    {
+        int16_t px = (int16_t)(x + dx[i]*dist);
+        int16_t py = (int16_t)(y + dy[i]*dist);
+        GPU_DrawPixel(c, (uint16_t)px, (uint16_t)py);
+        /* diagonal sparks get a second pixel so they read as a line */
+        if (dx[i] != 0 && dy[i] != 0)
+            GPU_DrawPixel(c, (uint16_t)(px - dx[i]), (uint16_t)(py - dy[i]));
+    }
+}
+
+void GPU_DrawProgressBar(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t frac256, GPU_Color color)
+{
+    GPU_DrawPanel(C_BLACK, C_GRAY_DARK, x, y, w, h);
+    if (frac256 > 256)
+        frac256 = 256;
+    int16_t filled = (int16_t)((int32_t)frac256 * (w-4) / 256);
+    if (filled > 0)
+        GPU_DrawFilledSquare(color, (int16_t)(x+2), (int16_t)(y+2), filled, (int16_t)(h-4));
 }
 
 void GPU_DrawConvexPolygon(GPU_Color color, const int16_t * sx, const int16_t * sy, uint8_t n)

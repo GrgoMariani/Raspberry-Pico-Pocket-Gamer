@@ -5,6 +5,7 @@
 #include "../interface.h"
 #include "../gameshared.h"
 #include <math.h>
+#include <string.h>
 #include "../textures.h"
 
 typedef enum {
@@ -14,7 +15,8 @@ typedef enum {
     MA_WALLUP = 0x04,
     MA_WALLDOWN = 0x08,
     MA_START = 0x10,
-    MA_GOAL = 0x20
+    MA_GOAL = 0x20,
+    MA_GEM = 0x40
 } MapArea;
 
 typedef struct {
@@ -27,9 +29,17 @@ typedef struct {
     MapArea _map[16][16];
     uint8_t _goalx;
     uint8_t _goaly;
+    uint32_t _startTime;
+    uint32_t _finishTime;
+    uint8_t _visited[16][16];   /* breadcrumb trail shown on the minimap */
+    uint8_t _gemsLeft;          /* gems still hidden in the maze */
+    uint8_t _gemFlash;          /* ticks of the "+GEM" popup */
 } Game6Memory;
 
 static Game6Memory * const memory = (Game6Memory*)(&mainMemory.sharedMemory.memblocks[0]);
+static uint32_t bestTime = 0;   /* fastest solve of this session, microseconds */
+
+#define LAB_GEMS 6
 
 static void _ClearWall(uint8_t x, uint8_t y, MapArea walldirection)
 {
@@ -93,22 +103,20 @@ static void _GenerateRecursively(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1)
     uint8_t leny = y1 - y0 + 1;
     if (lenx < 2 || leny < 2)
         return;
-    uint8_t rand = IF_Random() & 0xff;
-    uint8_t x_divider = (rand % (lenx-1)); // [x0-x_div] [x_div+1 - x1]
-    uint8_t y_divider = (rand % (leny-1)); // [y0-y_div] [y_div+1 - y1]
+    /* independent draws: deriving both dividers from one random value made
+       the horizontal and the vertical split correlated */
+    uint8_t x_divider = (uint8_t)(IF_Random() % (lenx-1)); // [x0-x_div] [x_div+1 - x1]
+    uint8_t y_divider = (uint8_t)(IF_Random() % (leny-1)); // [y0-y_div] [y_div+1 - y1]
 
     for (uint8_t i=0; i<lenx; i++)
         _GenerateWall(x0 + i, y0 + y_divider, MA_WALLDOWN);
     for (uint8_t i=0; i<leny; i++)
         _GenerateWall(x0 + x_divider, y0 + i, MA_WALLRIGHT);
-    rand = IF_Random() & 0xff;
-    uint8_t x1_door = (rand % (x_divider+1)); 
-    uint8_t x2_door = (rand % (lenx - x_divider - 1));
-    rand = IF_Random() & 0xff;
-    uint8_t y1_door = (rand % (y_divider+1));
-    uint8_t y2_door = (rand % (leny - y_divider - 1));
-    rand = IF_Random() & 0xff;
-    uint8_t freewall = rand & 0x03;
+    uint8_t x1_door = (uint8_t)(IF_Random() % (x_divider+1));
+    uint8_t x2_door = (uint8_t)(IF_Random() % (lenx - x_divider - 1));
+    uint8_t y1_door = (uint8_t)(IF_Random() % (y_divider+1));
+    uint8_t y2_door = (uint8_t)(IF_Random() % (leny - y_divider - 1));
+    uint8_t freewall = (uint8_t)(IF_Random() & 0x03);
     if (freewall != 0x00)
     {
         _ClearWall(x0 + x1_door, y0 + y_divider, MA_WALLDOWN);
@@ -165,17 +173,41 @@ static void G_Init(void)
     memory->dirX = 1.0, memory->dirY = 0.0; //initial direction vector
     memory->planeX = 0.0, memory->planeY = 0.66; //the 2d raycaster version of camera plane
     CreateLabirinth();
-    do
-    {
-        memory->_goalx = 15;
-        memory->_goaly = 15;
-    } while(IsGoalAchieved());
+    memory->_goalx = 15;
+    memory->_goaly = 15;
     memory->_map[memory->_goalx][memory->_goaly] |= MA_GOAL;
     _ClearWall(memory->_goalx, memory->_goaly, MA_WALLLEFT);
     _ClearWall(memory->_goalx, memory->_goaly, MA_WALLRIGHT);
     _ClearWall(memory->_goalx, memory->_goaly, MA_WALLUP);
     _ClearWall(memory->_goalx, memory->_goaly, MA_WALLDOWN);
+    memory->_startTime = IF_GetCurrentTime();
+    memory->_finishTime = 0;
+    for (uint8_t i = 0; i < 16; i++)
+        for (uint8_t j = 0; j < 16; j++)
+            memory->_visited[i][j] = 0;
+    memory->_visited[0][0] = 1;
+    /* scatter gems through the maze: collecting them is optional, but they
+       pull the player into corners the direct route would never visit */
+    memory->_gemsLeft = 0;
+    for (uint8_t g = 0; g < LAB_GEMS; g++)
+    {
+        for (uint8_t tries = 0; tries < 40; tries++)
+        {
+            uint8_t gx = (uint8_t)Random_Range(16);
+            uint8_t gy = (uint8_t)Random_Range(16);
+            if ((gx == 0 && gy == 0) || (gx == memory->_goalx && gy == memory->_goaly))
+                continue;
+            if (memory->_map[gx][gy] & MA_GEM)
+                continue;
+            memory->_map[gx][gy] |= MA_GEM;
+            memory->_gemsLeft++;
+            break;
+        }
+    }
+    memory->_gemFlash = 0;
     mainMemory._lastRenderedTick = CalculateTick();
+    Keyboard_GetPressedKeys();
+    Touch_ClearTap();
     // Prepare texture
     GPU_ClearTexture();
     Texture_CopyFrom(texture_rpi);
@@ -190,75 +222,109 @@ static void G_Init(void)
 
 #include <stdio.h>
 
+#define RESET_BUTTON_W (80)
+#define RESET_BUTTON_H (30)
+#define RESET_BUTTON_X (GPU_X/2 - RESET_BUTTON_W/2)
+#define RESET_BUTTON_Y (GPU_Y/2 + 30)
+
 static void G_Update(void)
 {
+    if (mainMemory._gameState == GS_DONE)
+    {
+        /* the maze is solved: show the result until the player wants a new one */
+        if (mainMemory.touchPressedNew)
+        {
+            if (mainMemory.touch_X >= RESET_BUTTON_X && mainMemory.touch_X <= RESET_BUTTON_X+RESET_BUTTON_W &&
+                mainMemory.touch_Y >= RESET_BUTTON_Y && mainMemory.touch_Y <= RESET_BUTTON_Y+RESET_BUTTON_H)
+                G_Init();
+        }
+        return;
+    }
 	KeyPressedEnum keyboard_held = Keyboard_GetHeldKeys();
+    /* Touch steers through the first person view: the left and right thirds
+       turn, the middle column moves forward (top half) or back (bottom half).
+       The minimap half stays free so it can still be read while driving. */
+    if (mainMemory.touchPressed && mainMemory.touch_X < GPU_X/2)
+    {
+        if (mainMemory.touch_X < (GPU_X/2)/3)
+            keyboard_held |= KEY_LEFT;
+        else if (mainMemory.touch_X > 2*(GPU_X/2)/3)
+            keyboard_held |= KEY_RIGHT;
+        else if (mainMemory.touch_Y < GPU_Y/2)
+            keyboard_held |= KEY_UP;
+        else
+            keyboard_held |= KEY_DOWN;
+    }
     uint32_t nowTick = CalculateTick();
     
     while (mainMemory._lastRenderedTick < nowTick)
     {
         mainMemory._lastRenderedTick++;
+        if (memory->_gemFlash)
+            memory->_gemFlash--;
+        memory->_visited[(uint8_t)memory->posX][(uint8_t)memory->posY] = 1;
+        /* pick up a gem when entering its cell */
+        {
+            uint8_t cx = (uint8_t)memory->posX, cy = (uint8_t)memory->posY;
+            if (memory->_map[cx][cy] & MA_GEM)
+            {
+                memory->_map[cx][cy] &= ~MA_GEM;
+                if (memory->_gemsLeft)
+                    memory->_gemsLeft--;
+                memory->_gemFlash = 20;
+            }
+        }
         if (keyboard_held != KEY_NONE)
         {
-            uint8_t move_complete = 0;
-            int8_t posX_before = (int8_t) memory->posX;
-            int8_t posY_before = (int8_t) memory->posY;
-
+            double stepX = 0.0, stepY = 0.0;
             if (keyboard_held & KEY_UP)
-            {    
-                memory->posX += SPEED_FACTOR*memory->dirX;
-                memory->posY += SPEED_FACTOR*memory->dirY;
-                move_complete = 1;
+            {
+                stepX += SPEED_FACTOR*memory->dirX;
+                stepY += SPEED_FACTOR*memory->dirY;
             }
             if (keyboard_held & KEY_DOWN)
             {
-                memory->posX -= SPEED_FACTOR*memory->dirX;
-                memory->posY -= SPEED_FACTOR*memory->dirY;
-                move_complete = 1;
+                stepX -= SPEED_FACTOR*memory->dirX;
+                stepY -= SPEED_FACTOR*memory->dirY;
             }
-            if (move_complete)
+            if (stepX != 0.0 || stepY != 0.0)
             {
-                if (memory->posX < 0.05)
-                    memory->posX = 0.05;
-                else if (memory->posX > 15.95)
-                    memory->posX = 15.95;
-                if (memory->posY<=0.05)
-                    memory->posY = 0.05;
-                else if (memory->posY > 15.95)
-                    memory->posY = 15.95;
-                int8_t posX_after = (int8_t) memory->posX;
-                int8_t posY_after = (int8_t) memory->posY;
-                if (posX_before != posX_after)
-                {
-                    int8_t diff = posX_after - posX_before;
-                    if (diff < 0)
-                    {
-                        if (memory->_map[posX_before][posY_before] & MA_WALLLEFT)
-                            memory->posX = (double)posX_before + 0.1;
-                    }
-                    else
-                    {
-                        if (memory->_map[posX_before][posY_before] & MA_WALLRIGHT)
-                            memory->posX = (double)posX_before + 0.9;
-                    }
-                }
-                if (posY_before != posY_after)
-                {
-                    int8_t diff = posY_after - posY_before;
-                    if (diff < 0)
-                    {
-                        if (memory->_map[posX_before][posY_before] & MA_WALLUP)
-                            memory->posY = (double)posY_before + 0.1;
-                    }
-                    else
-                    {
-                        if (memory->_map[posX_before][posY_before] & MA_WALLDOWN)
-                            memory->posY = (double)posY_before + 0.9;
-                    }
-                }
+                /* resolve the axes one after another so that a diagonal move
+                   cannot slip through the corner of a wall: the y check has
+                   to use the cell the x move ended up in */
+                int8_t cellX = (int8_t)memory->posX;
+                int8_t cellY = (int8_t)memory->posY;
+                double newX = memory->posX + stepX;
+                if (newX < 0.05) newX = 0.05;
+                else if (newX > 15.95) newX = 15.95;
+                int8_t newCellX = (int8_t)newX;
+                if (newCellX < cellX && (memory->_map[cellX][cellY] & MA_WALLLEFT))
+                    newX = (double)cellX + 0.1;
+                else if (newCellX > cellX && (memory->_map[cellX][cellY] & MA_WALLRIGHT))
+                    newX = (double)cellX + 0.9;
+                memory->posX = newX;
+
+                cellX = (int8_t)memory->posX;
+                double newY = memory->posY + stepY;
+                if (newY < 0.05) newY = 0.05;
+                else if (newY > 15.95) newY = 15.95;
+                int8_t newCellY = (int8_t)newY;
+                if (newCellY < cellY && (memory->_map[cellX][cellY] & MA_WALLUP))
+                    newY = (double)cellY + 0.1;
+                else if (newCellY > cellY && (memory->_map[cellX][cellY] & MA_WALLDOWN))
+                    newY = (double)cellY + 0.9;
+                memory->posY = newY;
+
                 if (IsGoalAchieved())
                 {
-                    ResetGame();
+                    memory->_finishTime = IF_GetCurrentTime();
+                    {
+                        uint32_t elapsed = memory->_finishTime - memory->_startTime;
+                        if (bestTime == 0 || elapsed < bestTime)
+                            bestTime = elapsed;
+                    }
+                    mainMemory._gameState = GS_DONE;
+                    return;
                 }
             }
             if (keyboard_held & KEY_LEFT)
@@ -286,6 +352,9 @@ static void G_Update(void)
 }
 
 // https://lodev.org/cgtutor/raycasting.html
+
+/* per column wall distance, so gem sprites can be depth tested against walls */
+static double _wallDepth[SCR_WIDTH];
 
 static uint8_t CheckIfWallHit(int x, int y, MapArea goal)
 {
@@ -369,6 +438,7 @@ static void DrawWall(int16_t x)
         perpWallDist = (sideDistX - deltaDistX);
     else
         perpWallDist = (sideDistY - deltaDistY);
+    _wallDepth[x] = perpWallDist;
 
     int lineHeight = (int)(SCR_HEIGHT / perpWallDist);
     int drawStart = -lineHeight / 2 + SCR_HEIGHT / 2;
@@ -408,21 +478,13 @@ static void DrawWall(int16_t x)
         drawTexture = 1;   
         break;
     }
-    if (side)
-    {
-        color = ((color & 0xff00)>>8) | ((color & 0x00ff)<<8);
-        int16_t r = (color & 0xf800)>>(11-3);
-		int16_t g = (color & 0x07e0)>>(5-2);
-		int16_t b = (color & 0x001f)<<3;
-        r = (r>32) ? r-32 : 0;
-        g = (g>32) ? g-32 : 0;
-        b = (b>32) ? b-32 : 0;
-        r &= 0xf8;
-        g &= 0xfc;
-        b &= 0xf8;
-        color = (r << (11-3)) | (g << (5-2)) | (b>>3);
-        color = ((color & 0xff00)>>8) | ((color & 0x00ff)<<8);
-    }
+    /* side walls are darker, and everything fades into the distance: the fog
+       makes the depth of a corridor readable at a glance */
+    int16_t fog = (int16_t)(256 - (int)(perpWallDist*22.0));
+    if (fog < 70) fog = 70;
+    if (fog > 256) fog = 256;
+    int16_t light = side ? (int16_t)(fog*200/256) : fog;
+    color = GPU_ShadeColor(color, light);
     
     if (!drawTexture)
     {
@@ -449,23 +511,46 @@ static void DrawWall(int16_t x)
         int texY = (int)texPos & (TEXTURE_SIZE - 1);
         texPos += step;
         GPU_Color pixel = Texture_GetPixel(texX, texY);
-        if (side)
-        {
-            pixel = ((pixel & 0xff00)>>8) | ((pixel & 0x00ff)<<8);
-            int16_t r = (pixel & 0xf800)>>(11-3);
-            int16_t g = (pixel & 0x07e0)>>(5-2);
-            int16_t b = (pixel & 0x001f)<<3;
-            r = (r>32) ? r-32 : 0;
-            g = (g>32) ? g-32 : 0;
-            b = (b>32) ? b-32 : 0;
-            r &= 0xf8;
-            g &= 0xfc;
-            b &= 0xf8;
-            pixel = (r << (11-3)) | (g << (5-2)) | (b>>3);
-            pixel = ((pixel & 0xff00)>>8) | ((pixel & 0x00ff)<<8);
-        }
-        GPU_DrawPixel(pixel, x, y);
+        GPU_DrawPixel(GPU_ShadeColor(pixel, light), x, y);
     }
+}
+
+/* the gems, drawn as small floating diamonds inside the first person view.
+   They are billboards: projected with the raycaster camera and depth tested
+   against the wall of the column they appear in. */
+static void DrawGems(void)
+{
+    double invDet = 1.0/(memory->planeX*memory->dirY - memory->dirX*memory->planeY);
+    for (uint8_t i = 0; i < 16; i++)
+        for (uint8_t j = 0; j < 16; j++)
+        {
+            if (!(memory->_map[i][j] & MA_GEM))
+                continue;
+            double rx = (double)i + 0.5 - memory->posX;
+            double ry = (double)j + 0.5 - memory->posY;
+            double tx = invDet*(memory->dirY*rx - memory->dirX*ry);
+            double ty = invDet*(-memory->planeY*rx + memory->planeX*ry);
+            if (ty < 0.3 || ty > 14.0)
+                continue;
+            int sx = (int)((SCR_WIDTH/2)*(1.0 + tx/ty));
+            if (sx < 2 || sx >= SCR_WIDTH-2)
+                continue;
+            int size = (int)(SCR_HEIGHT/ty/7.0);
+            if (size < 2) size = 2;
+            if (size > 13) size = 13;
+            /* hidden behind a wall? test the centre and both tips */
+            if (ty >= _wallDepth[sx])
+                continue;
+            if (sx-size >= 0 && ty >= _wallDepth[sx-size])
+                continue;
+            if (sx+size < SCR_WIDTH && ty >= _wallDepth[sx+size])
+                continue;
+            int cy = SCR_HEIGHT/2 + size;   /* floating a bit below the horizon */
+            GPU_DrawGlow(C_CYAN, (int16_t)sx, (int16_t)cy, (int16_t)(size+3));
+            GPU_DrawFilledTriangle(C_CYAN, (int16_t)sx, (int16_t)(cy-size), (int16_t)(sx-size), (int16_t)cy, (int16_t)(sx+size), (int16_t)cy);
+            GPU_DrawFilledTriangle(RGB(30,140,190), (int16_t)(sx-size), (int16_t)cy, (int16_t)(sx+size), (int16_t)cy, (int16_t)sx, (int16_t)(cy+size));
+            GPU_DrawPixel(C_WHITE, (uint16_t)(sx-size/3), (uint16_t)(cy-size/2));
+        }
 }
 
 
@@ -497,6 +582,9 @@ static void G_Draw(void)
     for (uint8_t i=0; i<16; i++)
         for (uint8_t j=0; j<16; j++)
         {
+            /* breadcrumb trail of where the player has been */
+            if (memory->_visited[i][j] && !(memory->_map[i][j] & MA_GOAL))
+                GPU_DrawPixel(RGB(40,70,40), (uint16_t)(START_X + i*BLOCK_SIZE + BLOCK_SIZE/2), (uint16_t)(START_Y + j*BLOCK_SIZE + BLOCK_SIZE/2));
             if (memory->_map[i][j] & MA_WALLLEFT)
                 GPU_DrawLine(C_GRAY_MEDIUM, START_X + i*BLOCK_SIZE,              START_Y + j*BLOCK_SIZE,              START_X + i*BLOCK_SIZE,              START_Y + j*BLOCK_SIZE+BLOCK_SIZE-1);
             if (memory->_map[i][j] & MA_WALLRIGHT)
@@ -505,13 +593,72 @@ static void G_Draw(void)
                 GPU_DrawLine(C_GRAY_MEDIUM, START_X + i*BLOCK_SIZE,              START_Y + j*BLOCK_SIZE,              START_X + i*BLOCK_SIZE+BLOCK_SIZE-1, START_Y + j*BLOCK_SIZE);
             if (memory->_map[i][j] & MA_WALLDOWN)
                 GPU_DrawLine(C_GRAY_MEDIUM, START_X + i*BLOCK_SIZE,              START_Y + j*BLOCK_SIZE+BLOCK_SIZE-1, START_X + i*BLOCK_SIZE+BLOCK_SIZE-1, START_Y + j*BLOCK_SIZE+BLOCK_SIZE-1);
+            if (memory->_map[i][j] & MA_GEM)
+            {
+                int16_t gx = (int16_t)(START_X + i*BLOCK_SIZE + BLOCK_SIZE/2);
+                int16_t gy = (int16_t)(START_Y + j*BLOCK_SIZE + BLOCK_SIZE/2);
+                GPU_DrawFilledTriangle(C_CYAN, gx, (int16_t)(gy-2), (int16_t)(gx-2), gy, (int16_t)(gx+2), gy);
+                GPU_DrawFilledTriangle(C_CYAN, (int16_t)(gx-2), gy, (int16_t)(gx+2), gy, gx, (int16_t)(gy+2));
+            }
             if (memory->_map[i][j] & MA_GOAL)
+            {
+                GPU_DrawGlow(C_BLUE, (int16_t)(START_X + i*BLOCK_SIZE + BLOCK_SIZE/2), (int16_t)(START_Y + j*BLOCK_SIZE + BLOCK_SIZE/2), (int16_t)(BLOCK_SIZE/2+2));
                 GPU_DrawFilledSquare(C_BLUE, START_X + i*BLOCK_SIZE,      START_Y + j*BLOCK_SIZE,              BLOCK_SIZE, BLOCK_SIZE);
+            }
         }
     // Draw FirstPerson
     for (int16_t i=0; i<GPU_X/2; i++)
     {
         DrawWall(i);
+    }
+    DrawGems();
+
+    /* time and a compass that points towards the goal */
+    {
+        const FontDescription * fs = &fontDescription[0];
+        char text[16];
+        uint32_t now = (mainMemory._gameState == GS_DONE) ? memory->_finishTime : IF_GetCurrentTime();
+        sprintf(text, "TIME %u", (unsigned)((now - memory->_startTime)/ONE_SECOND));
+        GPU_DrawText(C_WHITE, fs, 4, 4, text, (uint16_t)strlen(text));
+        sprintf(text, "GEMS %u/%u", (unsigned)(LAB_GEMS - memory->_gemsLeft), (unsigned)LAB_GEMS);
+        GPU_DrawText(C_CYAN, fs, 4, 14, text, (uint16_t)strlen(text));
+        if (bestTime)
+        {
+            sprintf(text, "BEST %u", (unsigned)(bestTime/ONE_SECOND));
+            GPU_DrawText(C_GRAY_MEDIUM, fs, 4, 24, text, (uint16_t)strlen(text));
+        }
+        if (memory->_gemFlash)
+            GPU_DrawTextOutlined(C_CYAN, C_BLACK, &fontDescription[1], GPU_X/4, 40, "+GEM");
+        GPU_DrawText(C_GRAY_DARK, fs, 4, GPU_Y-10, "touch: sides turn, middle walks", 31);
+        double toGoalX = (double)memory->_goalx + 0.5 - memory->posX;
+        double toGoalY = (double)memory->_goaly + 0.5 - memory->posY;
+        /* angle of the goal relative to the view direction */
+        double rel = atan2(toGoalY, toGoalX) - atan2(memory->dirY, memory->dirX);
+        int16_t cx = (int16_t)(GPU_X/2 - 18), cy = 14;
+        int16_t tx = (int16_t)(cx + 9.0*cos(rel));
+        int16_t ty = (int16_t)(cy + 9.0*sin(rel));
+        GPU_DrawEmptyCircle(C_GRAY_DARK, cx, cy, 11);
+        GPU_DrawLine(C_BLUE, cx, cy, tx, ty);
+        GPU_DrawFilledCircle(C_BLUE, tx, ty, 2);
+    }
+
+    if (mainMemory._gameState == GS_DONE)
+    {
+        const FontDescription * fb = &fontDescription[2];
+        const FontDescription * fm = &fontDescription[1];
+        char text[24];
+        GPU_DrawPanel(RGB(16,18,48), C_C3, (int16_t)(GPU_X/2-90), (int16_t)(GPU_Y/2-44), 180, 92);
+        GPU_DrawTextOutlined(C_C3, C_BLACK, fb, GPU_X/2, (int16_t)(GPU_Y/2-38), "WELL DONE");
+        sprintf(text, "TIME %u s   GEMS %u/%u", (unsigned)((memory->_finishTime - memory->_startTime)/ONE_SECOND),
+                (unsigned)(LAB_GEMS - memory->_gemsLeft), (unsigned)LAB_GEMS);
+        GPU_DrawTextCentered(C_WHITE, fm, GPU_X/2, (int16_t)(GPU_Y/2-14), text);
+        if (bestTime)
+        {
+            sprintf(text, "BEST %u s", (unsigned)(bestTime/ONE_SECOND));
+            GPU_DrawTextCentered(C_YELLOW, fm, GPU_X/2, (int16_t)(GPU_Y/2+2), text);
+        }
+        GPU_DrawButton(C_YELLOW, C_BLACK, fb, "RESET", RESET_BUTTON_X, RESET_BUTTON_Y,
+                       RESET_BUTTON_W, RESET_BUTTON_H);
     }
 }
 

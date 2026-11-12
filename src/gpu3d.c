@@ -663,28 +663,66 @@ static const GPU3D_Face _texturedCubeFaces[6] = {
 
 const GPU3D_Mesh GPU3D_TexturedCubeMesh = { _cubeVerts, 8, _texturedCubeFaces, 6 };
 
-/* octahedron: a cheap "ball" */
-static const Vec3 _ballVerts[6] = {
-    { 0,  FX(0.7), 0 },        /* 0 top    */
-    { 0, -FX(0.7), 0 },        /* 1 bottom */
-    { -H, 0, -H },             /* 2 front  */
-    {  H, 0, -H },             /* 3 right  */
-    {  H, 0,  H },             /* 4 back   */
-    { -H, 0,  H },             /* 5 left   */
+/* unit sphere: an octahedron subdivided once, every vertex projected onto
+   the radius-0.5 sphere. 18 vertices / 32 triangles - still cheap enough
+   for the painter's algorithm, but round enough to read as a ball. */
+static const Vec3 _ballVerts[18] = {
+    {  32768,      0,      0 },   /*  0 */
+    { -32768,      0,      0 },   /*  1 */
+    {      0,  32768,      0 },   /*  2 */
+    {      0, -32768,      0 },   /*  3 */
+    {      0,      0,  32768 },   /*  4 */
+    {      0,      0, -32768 },   /*  5 */
+    {  23170,  23170,      0 },   /*  6 */
+    {      0,  23170,  23170 },   /*  7 */
+    {  23170,      0,  23170 },   /*  8 */
+    {  23170,      0, -23170 },   /*  9 */
+    {      0,  23170, -23170 },   /* 10 */
+    {      0, -23170,  23170 },   /* 11 */
+    {  23170, -23170,      0 },   /* 12 */
+    {      0, -23170, -23170 },   /* 13 */
+    { -23170,      0,  23170 },   /* 14 */
+    { -23170,  23170,      0 },   /* 15 */
+    { -23170,      0, -23170 },   /* 16 */
+    { -23170, -23170,      0 },   /* 17 */
 };
 
-static const GPU3D_Face _ballFaces[8] = {
-    { 3, {3,2,0}, {0}, {0}, C_WHITE, 0, 1, 0 },
-    { 3, {4,3,0}, {0}, {0}, C_WHITE, 0, 1, 0 },
-    { 3, {5,4,0}, {0}, {0}, C_WHITE, 0, 1, 0 },
-    { 3, {2,5,0}, {0}, {0}, C_WHITE, 0, 1, 0 },
-    { 3, {2,3,1}, {0}, {0}, C_WHITE, 0, 1, 0 },
-    { 3, {3,4,1}, {0}, {0}, C_WHITE, 0, 1, 0 },
-    { 3, {4,5,1}, {0}, {0}, C_WHITE, 0, 1, 0 },
-    { 3, {5,2,1}, {0}, {0}, C_WHITE, 0, 1, 0 },
+static const GPU3D_Face _ballFaces[32] = {
+    { 3, { 0, 6, 8}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 2, 7, 6}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 4, 8, 7}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 6, 7, 8}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 0, 9, 6}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 5,10, 9}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 2, 6,10}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 9,10, 6}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 0, 8,12}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 4,11, 8}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 3,12,11}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 8,11,12}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 0,12, 9}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 3,13,12}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 5, 9,13}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, {12,13, 9}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 1,14,15}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 4, 7,14}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 2,15, 7}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, {14, 7,15}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 1,15,16}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 2,10,15}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 5,16,10}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, {15,10,16}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 1,17,14}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 3,11,17}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 4,14,11}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, {17,11,14}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 1,16,17}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 5,13,16}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, { 3,17,13}, {0}, {0}, C_WHITE, 0, 1, 0 },
+    { 3, {16,13,17}, {0}, {0}, C_WHITE, 0, 1, 0 },
 };
 
-const GPU3D_Mesh GPU3D_BallMesh = { _ballVerts, 6, _ballFaces, 8 };
+const GPU3D_Mesh GPU3D_BallMesh = { _ballVerts, 18, _ballFaces, 32 };
 
 /* four sided pyramid (base included) */
 static const Vec3 _pyramidVerts[5] = {

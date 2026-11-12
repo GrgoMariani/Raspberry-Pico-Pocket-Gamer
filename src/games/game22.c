@@ -42,9 +42,13 @@ typedef struct {
     uint8_t lives;
     uint8_t wave;
     uint32_t score;
+    uint16_t shield;             /* ticks of UFO power-up shield remaining */
     uint8_t state;                 /* 0 ready, 1 playing, 2 dying, 3 over, 4 wave */
     uint8_t stateTick;
-    uint8_t explosionX, explosionY, explosionTick;
+    /* screen coordinates: a uint8_t would wrap for x > 255 (the ufo flies
+       across the whole 320 pixel width) */
+    int16_t explosionX, explosionY;
+    uint8_t explosionTick;
 } Game22Memory;
 
 static Game22Memory * const memory = (Game22Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -109,6 +113,8 @@ static void G_Init(void)
     memory->lives = START_LIVES;
     memory->score = 0;
     memory->playerX = GPU_X/2;
+    Touch_ClearTap();
+    Keyboard_GetPressedKeys();
     StartWave(1);
 }
 
@@ -117,8 +123,8 @@ static int16_t InvY(uint8_t r) { return (int16_t)(memory->blockY + r*INV_CELL_H)
 
 static void ExplodeAt(int16_t x, int16_t y)
 {
-    memory->explosionX = (uint8_t)x;
-    memory->explosionY = (uint8_t)y;
+    memory->explosionX = x;
+    memory->explosionY = y;
     memory->explosionTick = 6;
 }
 
@@ -319,6 +325,7 @@ static void Tick(void)
                 ExplodeAt((int16_t)(memory->ufoX+8), 16);
                 memory->ufoX = -1;
                 memory->bulletY = -1;
+                memory->shield = 240;      /* the UFO drops a temporary shield */
             }
             if (memory->bulletY < 4)
                 memory->bulletY = -1;
@@ -350,6 +357,13 @@ static void Tick(void)
         if (abs(memory->bombX[b]-memory->playerX) < PLAYER_W/2 && memory->bombY[b] > PLAYER_Y-4)
         {
             memory->bombY[b] = -1;
+            if (memory->shield)
+            {
+                /* the power-up shield absorbs the hit */
+                memory->shield = 0;
+                ExplodeAt(memory->playerX, (int16_t)(PLAYER_Y-8));
+                continue;
+            }
             ExplodeAt(memory->playerX, PLAYER_Y);
             memory->state = 2;
             memory->stateTick = 0;
@@ -382,6 +396,8 @@ static void Tick(void)
 
     if (memory->explosionTick)
         memory->explosionTick--;
+    if (memory->shield)
+        memory->shield--;
 }
 
 static void ResetButtonTouched(void)
@@ -395,6 +411,13 @@ static void ResetButtonTouched(void)
 
 static void G_Update(void)
 {
+    /* check the reset button every main loop iteration, a touch press edge
+       only lives for one iteration and would be missed between two ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
         mainMemory._lastRenderedTick = tick - 4*NUM_TICKS;
@@ -402,10 +425,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -430,11 +450,7 @@ static void G_Draw(void)
     int len;
     GPU_ClearFramebuffers();
     GPU_DrawVerticalGradient(RGB(2,2,12), C_BLACK, 0, 0, GPU_X, GPU_Y);
-    for (uint8_t i = 0; i < 40; i++)
-    {
-        uint32_t seed = (uint32_t)i*2654435761u;
-        GPU_DrawPixel(C_GRAY_DARK, (uint16_t)((seed >> 6) % GPU_X), (uint16_t)((seed >> 16) % GPU_Y));
-    }
+    GPU_DrawStarfield(21, 45, IF_GetCurrentTime());
 
     /* invaders */
     for (uint8_t r = 0; r < INV_ROWS; r++)
@@ -472,10 +488,20 @@ static void G_Draw(void)
         GPU_DrawFilledSquare(C_C3, (int16_t)(memory->playerX-3), (int16_t)(PLAYER_Y-6), 6, 4);
         GPU_DrawFilledSquare(C_C3, (int16_t)(memory->playerX-1), (int16_t)(PLAYER_Y-9), 2, 3);
     }
+    /* the UFO power-up shield */
+    if (memory->shield && memory->state == 1)
+    {
+        GPU_Color sc = (memory->shield < 60 && (memory->shield & 4)) ? C_GRAY_DARK : C_CYAN;
+        GPU_DrawEmptyCircle(sc, memory->playerX, (int16_t)(PLAYER_Y-2), 13);
+        GPU_DrawEmptyCircle(GPU_ShadeColor(sc, 130), memory->playerX, (int16_t)(PLAYER_Y-2), 15);
+    }
 
     /* shots */
     if (memory->bulletY >= 0)
+    {
+        GPU_DrawGlow(C_WHITE, memory->bulletX, memory->bulletY, 4);
         GPU_DrawLine(C_WHITE, memory->bulletX, memory->bulletY, memory->bulletX, (int16_t)(memory->bulletY+4));
+    }
     for (uint8_t b = 0; b < 3; b++)
         if (memory->bombY[b] >= 0)
         {

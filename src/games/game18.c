@@ -21,8 +21,8 @@
 
 #define FIELD_HALF 6             /* the frog walks from -6 to +6 */
 #define LANE_DEPTH FX(1.0)
-#define MAX_CARS 10
-#define MAX_LOGS 10
+#define MAX_CARS 14
+#define MAX_LOGS 12
 #define HOP_TICKS 5
 #define START_LIVES 3
 #define START_TIME (30*NUM_TICKS)
@@ -68,6 +68,8 @@ typedef struct {
     uint32_t _score;
     uint8_t _level;
     uint16_t _timeLeft;
+    uint8_t _flySlot;      /* home slot holding a bonus fly, 255 = none */
+    uint16_t _flyTimer;
 } Game18Memory;
 
 static Game18Memory * const memory = (Game18Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -144,6 +146,8 @@ static void StartLevel(uint8_t level)
     BuildLevel(level);
     for (uint8_t i = 0; i < HOME_SLOTS; i++)
         memory->_homes[i] = 0;
+    memory->_flySlot = 255;
+    memory->_flyTimer = 200;
     PlaceFrog();
     mainMemory._gameState = GS_RUNNING;
     mainMemory._lastRenderedTick = CalculateTick();
@@ -154,6 +158,8 @@ static void G_Init(void)
     memset(memory, 0, sizeof(Game18Memory));
     memory->_lives = START_LIVES;
     memory->_score = 0;
+    Touch_ClearTap();
+    Keyboard_GetPressedKeys();
     StartLevel(1);
 }
 
@@ -233,6 +239,12 @@ static void FinishHop(void)
             {
                 memory->_homes[i] = 1;
                 memory->_score += 100 + memory->_timeLeft/10;
+                /* catching the bonus fly is worth extra */
+                if (i == memory->_flySlot)
+                {
+                    memory->_score += 200;
+                    memory->_flySlot = 255;
+                }
                 memory->_state = FS_HOME;
                 memory->_stateTick = 0;
                 uint8_t all = 1;
@@ -332,6 +344,28 @@ static void Tick(void)
     case FS_PLAYING:
     {
         MoveTraffic();
+        /* the bonus fly comes and goes in an empty home slot */
+        if (memory->_flyTimer)
+            memory->_flyTimer--;
+        else
+        {
+            if (memory->_flySlot == 255)
+            {
+                uint8_t empty[HOME_SLOTS];
+                uint8_t n = 0;
+                for (uint8_t i = 0; i < HOME_SLOTS; i++)
+                    if (!memory->_homes[i])
+                        empty[n++] = i;
+                if (n)
+                    memory->_flySlot = empty[Random_Range(n)];
+                memory->_flyTimer = 300;
+            }
+            else
+            {
+                memory->_flySlot = 255;
+                memory->_flyTimer = 200;
+            }
+        }
         /* the frog drifts with its log */
         if (memory->_riding)
         {
@@ -367,18 +401,23 @@ static void Tick(void)
         else if (keys & KEY_DOWN)  dLane = -1;
         else if (keys & KEY_LEFT)  dX = -1;
         else if (keys & KEY_RIGHT) dX = 1;
-        if (dLane == 0 && dX == 0 && mainMemory.touchPressedNew)
+        if (dLane == 0 && dX == 0)
         {
-            int16_t fx, fy;
-            FrogScreen(&fx, &fy);
-            int32_t dx = (int32_t)mainMemory.touch_X - fx;
-            int32_t dy = (int32_t)mainMemory.touch_Y - fy;
-            if (dx*dx + dy*dy > 100)
+            /* the tap latch delivers the press even between two logic ticks */
+            uint16_t tx, ty;
+            if (Touch_TakeTap(&tx, &ty))
             {
-                if ((dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx))
-                    dLane = (dy < 0) ? 1 : -1;
-                else
-                    dX = (dx < 0) ? -1 : 1;
+                int16_t fx, fy;
+                FrogScreen(&fx, &fy);
+                int32_t dx = (int32_t)tx - fx;
+                int32_t dy = (int32_t)ty - fy;
+                if (dx*dx + dy*dy > 100)
+                {
+                    if ((dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx))
+                        dLane = (dy < 0) ? 1 : -1;
+                    else
+                        dX = (dx < 0) ? -1 : 1;
+                }
             }
         }
         if (dLane || dX)
@@ -428,6 +467,13 @@ static void Tick(void)
 
 static void G_Update(void)
 {
+    /* check the reset button every main loop iteration, a touch press edge
+       only lives for one iteration and would be missed between two ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
         mainMemory._lastRenderedTick = tick - 4*NUM_TICKS;
@@ -435,10 +481,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -521,6 +564,20 @@ static void DrawHomes(void)
         Vec3 slotScale = GPU3D_Vec(FX(1.7), FX(0.5), FX(0.85));
         GPU3D_DrawBox(memory->_homes[i] ? C_GREEN : RGB(0, 40, 0), &slot,
                       slotScale.x, slotScale.y, slotScale.z, 0, 0, 0, 0);
+        /* the bonus fly hovers over its slot */
+        if (i == memory->_flySlot && !memory->_homes[i])
+        {
+            int16_t fx, fy;
+            Vec3 fp = WorldPos(_homeX[i], HOME_LANE, FX(0.7));
+            Project(&fp, &fx, &fy);
+            if (fx > 0)
+            {
+                GPU_DrawGlow(C_YELLOW, fx, fy, 6);
+                GPU_DrawFilledCircle(C_BLACK, fx, fy, 2);
+                GPU_DrawPixel(C_WHITE, (uint16_t)(fx-2), (uint16_t)(fy-2));
+                GPU_DrawPixel(C_WHITE, (uint16_t)(fx+2), (uint16_t)(fy-2));
+            }
+        }
     }
 }
 
@@ -588,6 +645,13 @@ static void DrawMovers(void)
             }
             GPU_Color frogColor = (memory->_state == FS_DYING) ? C_RED : C_GREEN;
             fixed squash = (memory->_state == FS_DYING) ? FX(0.4) : FX(0.7);
+            if (memory->_state != FS_DYING)
+            {
+                int16_t gx, gy;
+                Project(&p, &gx, &gy);
+                if (gx > 0)
+                    GPU_DrawGlow(C_GREEN, gx, gy, 10);
+            }
             GPU3D_DrawBox(frogColor, &p, FX(0.7), squash, FX(0.7), 0, 0, 0, 0);
             Vec3 head = p;
             head.y += FX(0.3);

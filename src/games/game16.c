@@ -42,6 +42,7 @@ typedef struct {
     uint32_t score;
     uint8_t mission;
     uint8_t lives;
+    uint8_t streak;      /* consecutive successful landings */
     MissionState state;
     uint8_t stateTick;
     int16_t lastAltitude;
@@ -116,6 +117,8 @@ static void G_Init(void)
 {
     memory->score = 0;
     memory->lives = MC_LIVES;
+    memory->streak = 0;
+    Touch_ClearTap();
     StartMission(1);
 }
 
@@ -123,6 +126,7 @@ static void Crash(void)
 {
     memory->state = MS_CRASHED;
     memory->stateTick = 0;
+    memory->streak = 0;
     if (memory->lives)
         memory->lives--;
 }
@@ -136,7 +140,9 @@ static void Land(void)
     uint32_t accuracy = (off < memory->padSize/2) ? 300 : 150;
     uint32_t softness = (uint32_t)(200 - (memory->vy < 0 ? -memory->vy : memory->vy)/FX(0.01));
     if (softness > 200) softness = 0;
-    memory->score += 100*memory->mission + accuracy + softness + (uint32_t)memory->fuel*2;
+    memory->streak++;
+    /* a streak of clean landings multiplies the mission bonus */
+    memory->score += (100*memory->mission + accuracy + softness + (uint32_t)memory->fuel*2) * memory->streak;
     memory->state = MS_LANDED;
     memory->stateTick = 0;
     memory->vy = 0;
@@ -154,11 +160,14 @@ static void PhysicsStep(void)
     if (held & KEY_RIGHT) side = 1;
     if (held & KEY_DOWN)  fore = 1;
 
-    /* touch: upper third = main engine, left/right third = lateral */
+    /* touch: upper third = main engine, lower third = forward, the left and
+       right thirds of the middle row = lateral */
     if (mainMemory.touchPressed)
     {
         if (mainMemory.touch_Y < GPU_Y/3)
             main = 1;
+        else if (mainMemory.touch_Y > 2*GPU_Y/3)
+            fore = 1;
         else if (mainMemory.touch_X < GPU_X/3)
             side = -1;
         else if (mainMemory.touch_X > 2*GPU_X/3)
@@ -274,6 +283,13 @@ static void Tick(void)
 
 static void G_Update(void)
 {
+    /* check the reset button every main loop iteration, a touch press edge
+       only lives for one iteration and would be missed between two ticks */
+    if (mainMemory._gameState == GS_DONE)
+    {
+        ResetButtonTouched();
+        Touch_ClearTap();
+    }
     uint32_t tick = CalculateTick();
     if (tick > mainMemory._lastRenderedTick + 4*NUM_TICKS)
         mainMemory._lastRenderedTick = tick - 4*NUM_TICKS;
@@ -281,10 +297,7 @@ static void G_Update(void)
     {
         mainMemory._lastRenderedTick++;
         if (mainMemory._gameState == GS_DONE)
-        {
-            ResetButtonTouched();
             continue;
-        }
         Tick();
     }
 }
@@ -463,7 +476,7 @@ static void DrawHud(void)
     len = sprintf(text, "PAD RANGE %4d", range);
     GPU_DrawText(C_C1, fs, (int16_t)(GPU_X-114), 56, text, (uint16_t)len);
 
-    const char * legend = "UP engine  LEFT/RIGHT strafe  DOWN forward";
+    const char * legend = "UP engine  L/R strafe  DOWN forward  touch: top/mid/bottom";
     GPU_DrawText(C_GRAY_DARK, fs, 4, (int16_t)(GPU_Y-10), legend, (uint16_t)strlen(legend));
 }
 
@@ -474,6 +487,7 @@ static void G_Draw(void)
     GPU_ClearFramebuffers();
     /* sky and ground */
     GPU_DrawVerticalGradient(RGB(0,0,24), RGB(0,0,0), 0, 0, GPU_X, GPU_Y/2);
+    GPU_DrawStarfieldIn(16, 40, IF_GetCurrentTime(), GPU_X, GPU_Y/2);
     GPU_DrawVerticalGradient(RGB(10,10,14), RGB(0,0,0), 0, GPU_Y/2, GPU_X, GPU_Y/2);
 
     /* the camera sits behind and above the module and looks down at it */

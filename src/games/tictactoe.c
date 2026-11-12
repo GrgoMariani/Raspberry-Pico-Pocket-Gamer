@@ -28,7 +28,13 @@ typedef struct {
     uint8_t _victoryMask;      /* one bit per winning line */
     TTTResult _final;
     uint32_t _aiTick;
+    uint8_t _withAI;
+    uint8_t _cursor;           /* keyboard cursor, cell index 0..8 */
 } TTTMemory;
+
+/* session record against the computer, kept outside the shared memory so it
+   survives a visit to another game */
+static uint16_t _wins = 0, _losses = 0, _draws = 0;
 
 static TTTMemory * const memory = (TTTMemory*)(&mainMemory.sharedMemory.memblocks[0]);
 
@@ -104,6 +110,37 @@ static uint8_t WinsImmediately(uint8_t x, uint8_t y, Cell side)
     return (uint8_t)(r == ((side == TTT_X) ? TTT_X_WINS : TTT_O_WINS));
 }
 
+/* how many cells would let `side` win on the next move? */
+static uint8_t CountWinningMoves(Cell side)
+{
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < 9; i++)
+        if (WinsImmediately(i%3, i/3, side))
+            n++;
+    return n;
+}
+
+/* collects the cells in which `side` would create two winning threats at
+   once (a fork - the opponent can only block one of them) */
+static uint8_t FindForks(Cell side, uint8_t * cells)
+{
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < 9; i++)
+    {
+        uint8_t x = i%3, y = i/3;
+        if (CellAt(x, y) != TTT_EMPTY)
+            continue;
+        SetCell(x, y, side);
+        memory->_moves++;
+        uint8_t threats = CountWinningMoves(side);
+        memory->_moves--;
+        SetCell(x, y, TTT_EMPTY);
+        if (threats >= 2)
+            cells[n++] = i;
+    }
+    return n;
+}
+
 static void Play(uint8_t x, uint8_t y, Cell side)
 {
     if (CellAt(x, y) != TTT_EMPTY)
@@ -118,11 +155,21 @@ static void Play(uint8_t x, uint8_t y, Cell side)
         memory->_final = r;
         memory->_victoryMask = mask;
         mainMemory._gameState = GS_DONE;
+        /* keep a session record against the computer */
+        if (memory->_withAI)
+        {
+            if (r == TTT_DRAW)
+                _draws++;
+            else if ((r == TTT_O_WINS) == (memory->_aiIsO == 1))
+                _losses++;
+            else
+                _wins++;
+        }
     }
 }
 
-/* the computer: win if it can, block if it must, otherwise prefer the centre,
-   then a corner, then anything */
+/* the computer: win if it can, block if it must, fork if possible, defend
+   against forks, otherwise prefer the centre, then a corner, then anything */
 static void AIMove(void)
 {
     Cell ai = memory->_aiIsO ? TTT_O : TTT_X;
@@ -139,6 +186,57 @@ static void AIMove(void)
             Play(i%3, i/3, ai);
             return;
         }
+    /* take a fork of our own */
+    uint8_t forks[9];
+    uint8_t nForks = FindForks(ai, forks);
+    if (nForks)
+    {
+        uint8_t pick = forks[Random_Range(nForks)];
+        Play(pick%3, pick/3, ai);
+        return;
+    }
+    /* stop a fork of the opponent */
+    nForks = FindForks(human, forks);
+    if (nForks == 1)
+    {
+        Play(forks[0]%3, forks[0]/3, ai);
+        return;
+    }
+    if (nForks > 1)
+    {
+        /* two forks cannot both be blocked - force the opponent to defend
+           instead: make a threat whose forced answer is not a fork cell */
+        for (uint8_t i = 0; i < 9; i++)
+        {
+            uint8_t x = i%3, y = i/3;
+            if (CellAt(x, y) != TTT_EMPTY)
+                continue;
+            SetCell(x, y, ai);
+            memory->_moves++;
+            uint8_t blockCell = 9;
+            for (uint8_t j = 0; j < 9; j++)
+                if (WinsImmediately(j%3, j/3, ai))
+                {
+                    blockCell = j;
+                    break;
+                }
+            memory->_moves--;
+            SetCell(x, y, TTT_EMPTY);
+            if (blockCell == 9)
+                continue;
+            uint8_t isFork = 0;
+            for (uint8_t f = 0; f < nForks; f++)
+                if (forks[f] == blockCell)
+                    isFork = 1;
+            if (!isFork)
+            {
+                Play(x, y, ai);
+                return;
+            }
+        }
+        Play(forks[0]%3, forks[0]/3, ai);
+        return;
+    }
     static const uint8_t preference[9] = { 4, 0, 2, 6, 8, 1, 3, 5, 7 };
     uint8_t choices[9];
     uint8_t n = 0;
@@ -158,9 +256,13 @@ void TTT_Init(uint8_t withAI)
     memset(memory, 0, sizeof(TTTMemory));
     mainMemory._gameState = GS_RUNNING;
     memory->_nextIsO = 0;
+    memory->_withAI = withAI;
     memory->_aiIsO = (withAI && (Random_Next() & 1)) ? 1 : 0;
     memory->_aiTick = CalculateTick() + 2;
+    memory->_cursor = 4;
     mainMemory._lastRenderedTick = CalculateTick();
+    Keyboard_GetPressedKeys();
+    Touch_ClearTap();
 }
 
 static void TouchMove(uint8_t withAI)
@@ -184,8 +286,32 @@ static void TouchMove(uint8_t withAI)
     memory->_aiTick = CalculateTick() + 2;
 }
 
+/* switches: arrows move a cursor over the board, UP+DOWN together places the
+   mark (the same convention the other grid games use) */
+static void KeyboardMove(uint8_t withAI)
+{
+    KeyPressedEnum keys = Keyboard_GetPressedKeys();
+    if (mainMemory._gameState != GS_RUNNING)
+        return;
+    if (withAI && memory->_nextIsO == memory->_aiIsO)
+        return;                       /* the computer is thinking */
+    uint8_t cx = (uint8_t)(memory->_cursor % 3), cy = (uint8_t)(memory->_cursor / 3);
+    if ((keys & KEY_UP) && (keys & KEY_DOWN))
+    {
+        Play(cx, cy, memory->_nextIsO ? TTT_O : TTT_X);
+        memory->_aiTick = CalculateTick() + 2;
+        return;
+    }
+    if (keys & KEY_LEFT)  cx = (uint8_t)((cx + 2) % 3);
+    if (keys & KEY_RIGHT) cx = (uint8_t)((cx + 1) % 3);
+    if (keys & KEY_UP)    cy = (uint8_t)((cy + 2) % 3);
+    if (keys & KEY_DOWN)  cy = (uint8_t)((cy + 1) % 3);
+    memory->_cursor = (uint8_t)(cy*3 + cx);
+}
+
 void TTT_Update(uint8_t withAI)
 {
+    KeyboardMove(withAI);
     TouchMove(withAI);
     if (!withAI || mainMemory._gameState != GS_RUNNING)
         return;
@@ -233,6 +359,8 @@ void TTT_Draw(uint8_t withAI)
     /* the board */
     GPU_DrawPanel(RGB(20,24,60), C_C1, (int16_t)(BOARD_X-2), (int16_t)(BOARD_Y-2),
                   (int16_t)(BOARD_SIZE+4), (int16_t)(BOARD_SIZE+4));
+    uint8_t showCursor = (uint8_t)(mainMemory._gameState == GS_RUNNING &&
+                                   (!withAI || memory->_nextIsO != memory->_aiIsO));
     for (uint8_t y = 0; y < 3; y++)
         for (uint8_t x = 0; x < 3; x++)
         {
@@ -243,6 +371,9 @@ void TTT_Draw(uint8_t withAI)
             Cell c = CellAt(x, y);
             if (c != TTT_EMPTY)
                 DrawMark(c, cx, cy, (uint8_t)(memory->_final != TTT_PLAYING));
+            if (showCursor && (uint8_t)(y*3 + x) == memory->_cursor)
+                GPU_DrawEmptySquare(C_YELLOW, (int16_t)(BOARD_X + x*CELL + 1),
+                                    (int16_t)(BOARD_Y + y*CELL + 1), (int16_t)(CELL-2), (int16_t)(CELL-2));
         }
     /* the winning line */
     if (memory->_victoryMask)
@@ -278,7 +409,7 @@ void TTT_Draw(uint8_t withAI)
             if (!withAI)
                 DrawMark(memory->_nextIsO ? TTT_O : TTT_X, S2_CENTER_X, 48, 0);
             else
-                GPU_DrawTextCentered(C_GRAY_LIGHT, fm, S2_CENTER_X, 44, "tap a field");
+                GPU_DrawTextCentered(C_GRAY_LIGHT, fm, S2_CENTER_X, 44, "tap or UP+DOWN");
         }
     }
     else
@@ -318,6 +449,13 @@ void TTT_Draw(uint8_t withAI)
         DrawMark(TTT_O, (int16_t)(GPU_X/2+26), (int16_t)(y+5), 0);
         const char * labelO = withAI ? (memory->_aiIsO ? "computer" : "you") : "player 2";
         GPU_DrawText(C_GRAY_LIGHT, fm, (int16_t)(GPU_X/2+44), y, labelO, (uint16_t)strlen(labelO));
+    }
+
+    /* session record against the computer */
+    if (withAI)
+    {
+        sprintf(text, "W%u L%u D%u", (unsigned)_wins, (unsigned)_losses, (unsigned)_draws);
+        GPU_DrawTextCentered(C_GRAY_MEDIUM, fm, S2_CENTER_X, 138, text);
     }
 
     if (mainMemory._gameState != GS_RUNNING)
