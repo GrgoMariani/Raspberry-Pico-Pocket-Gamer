@@ -54,6 +54,18 @@ extern const Callbacks G35_Callbacks;   // Reversi
 extern const Callbacks G36_Callbacks;   // Hangman
 extern const Callbacks G37_Callbacks;   // Bomberman
 extern const Callbacks G38_Callbacks;   // Tank Fight
+extern const Callbacks G39_Callbacks;   // Dino Run
+extern const Callbacks G40_Callbacks;   // Number Train (counting game)
+extern const Callbacks G41_Callbacks;   // Count It! (counting 1..10)
+extern const Callbacks G42_Callbacks;   // ABC Match (letter recognition)
+extern const Callbacks G43_Callbacks;   // Shape Hunt (shapes & colours)
+extern const Callbacks G44_Callbacks;   // Add It Up (picture addition)
+extern const Callbacks G45_Callbacks;   // Big or Small (number comparison)
+extern const Callbacks G46_Callbacks;   // Subtract It (picture subtraction)
+extern const Callbacks G47_Callbacks;   // Pattern Play (pattern completion)
+extern const Callbacks G48_Callbacks;   // What Time? (reading the clock)
+extern const Callbacks G49_Callbacks;   // Spot the Diff (finding differences)
+extern const Callbacks G50_Callbacks;   // Wagon Order (educational shunting)
 
 extern int breakGame;
 

@@ -234,7 +234,13 @@ static void G_Draw(void)
 
     /* HUD */
     sprintf(text, "HEIGHT %u", (unsigned)memory->score);
-    GPU_DrawTextOutlined(C_WHITE, C_BLACK, fm, 6, 4, text);
+    /* GPU_DrawTextOutlined centres on x - passing 6 used to push most of the
+       text off the left edge of the screen. Draw left aligned with a shadow. */
+    {
+        uint16_t len = (uint16_t)strlen(text);
+        GPU_DrawText(C_BLACK, fm, 7, 5, text, len);
+        GPU_DrawText(C_WHITE, fm, 6, 4, text, len);
+    }
     sprintf(text, "BEST %u", (unsigned)bestScore);
     GPU_DrawText(C_YELLOW, fm, (int16_t)(GPU_X - 6 - strlen(text)*fm->width), 4, text, (uint16_t)strlen(text));
 

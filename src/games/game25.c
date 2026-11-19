@@ -48,12 +48,25 @@ static void PadRect(uint8_t i, int16_t * x, int16_t * y)
     *y = (int16_t)(PAD_TOP + (i >> 1)*(PAD_SIZE + PAD_GAP));
 }
 
+/* playback speeds up as the sequence grows, like the arcade original */
+static uint8_t ShowOn(void)
+{
+    int v = SHOW_ON - (int)memory->len/5;
+    return (uint8_t)(v < 3 ? 3 : v);
+}
+
+static uint8_t ShowGap(void)
+{
+    int v = SHOW_GAP - (int)memory->len/10;
+    return (uint8_t)(v < 2 ? 2 : v);
+}
+
 static void StartShow(void)
 {
     memory->state = 1;
     memory->pos = 0;
     memory->phase = 1;
-    memory->timer = SHOW_GAP;
+    memory->timer = ShowGap();
     memory->lit = 255;
 }
 
@@ -143,7 +156,7 @@ static void G_Update(void)
                 {
                     memory->lit = 255;
                     memory->phase = 1;
-                    memory->timer = SHOW_GAP;
+                    memory->timer = ShowGap();
                 }
                 else
                 {
@@ -158,7 +171,7 @@ static void G_Update(void)
                         memory->lit = memory->seq[memory->pos];
                         memory->pos++;
                         memory->phase = 0;
-                        memory->timer = SHOW_ON;
+                        memory->timer = ShowOn();
                     }
                 }
             }

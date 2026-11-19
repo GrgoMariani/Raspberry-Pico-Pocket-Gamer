@@ -1,7 +1,28 @@
 #!/usr/bin/env python3
-"""Converts a PPM frame dump of the emulator into a PNG (needs Pillow)."""
+"""Converts a PPM frame dump of the emulator into a PNG.
+
+Uses Pillow when it is installed, otherwise falls back to a small pure
+stdlib PNG writer so the shot workflow works on any Python installation.
+"""
+import struct
 import sys
-from PIL import Image
+import zlib
+
+
+def write_png(path, w, h, rgb):
+    def chunk(tag, payload):
+        return (struct.pack(">I", len(payload)) + tag + payload +
+                struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    # each scanline is prefixed with filter byte 0 (None)
+    raw = b"".join(b"\x00" + rgb[y * w * 3:(y + 1) * w * 3] for y in range(h))
+    png = (b"\x89PNG\r\n\x1a\n" +
+           chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) +
+           chunk(b"IDAT", zlib.compress(raw, 9)) +
+           chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(png)
+
 
 if len(sys.argv) < 3:
     print("usage: ppm2png.py in.ppm out.png")
@@ -18,6 +39,10 @@ with open(sys.argv[1], "rb") as f:
     maxval = int(f.readline())
     data = f.read()
 
-img = Image.frombytes("RGB", (w, h), data)
-img.save(sys.argv[2])
+try:
+    from PIL import Image
+    img = Image.frombytes("RGB", (w, h), data)
+    img.save(sys.argv[2])
+except ImportError:
+    write_png(sys.argv[2], w, h, data)
 print(f"{sys.argv[2]}: {w}x{h}")

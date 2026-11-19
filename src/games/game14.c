@@ -51,6 +51,8 @@ typedef struct {
 	PowerUp drops[3];
 	uint16_t wideTimer;      /* ticks of wide paddle remaining */
 	uint16_t slowTimer;      /* ticks of slow ball remaining */
+	uint16_t popupTicks;     /* ticks of the power-up name popup */
+	uint8_t popupType;       /* which power-up was caught last */
 } Game14Memory;
 
 static Game14Memory * const memory = (Game14Memory*)(&mainMemory.sharedMemory.memblocks[0]);
@@ -105,6 +107,8 @@ static void G_Init(void)
 	memory->levelFlash = 0;
 	memory->wideTimer = 0;
 	memory->slowTimer = 0;
+	memory->popupTicks = 0;
+	memory->popupType = 0;
 	for (uint8_t d = 0; d < 3; d++)
 		memory->drops[d].active = 0;
 	mainMemory._lastRenderedTick = CalculateTick();
@@ -341,6 +345,9 @@ static void UpdatePowerUps()
 				else if (p->type == 2) memory->score += 100;
 				else if (p->type == 3) SpawnMultiball();
 				else if (p->type == 4 && memory->lives < 5) memory->lives++;
+				/* tell the player what they just caught */
+				memory->popupType = p->type;
+				memory->popupTicks = 20;
 				continue;
 			}
 		}
@@ -359,6 +366,8 @@ static void G_Update(void)
 		{
 			if (memory->levelFlash)
 				memory->levelFlash--;
+			if (memory->popupTicks)
+				memory->popupTicks--;
 			/* dragging a finger moves the paddle */
 			if (mainMemory.touchPressed)
 			{
@@ -449,20 +458,23 @@ static void G_Draw(void)
 		{
 			if (memory->blocks[i][j].lives)
 			{
-				GPU_Color color;
-				switch (memory->blocks[i][j].lives)
+				/* classic rainbow rows; a damaged brick dims, a brick on its
+				   last life gets cracks so the remaining hit points read at a
+				   glance (they used to be four shades of grey) */
+				static const GPU_Color rowColor[4] = { C_RED, C_ORANGE, C_YELLOW, C_C3 };
+				uint8_t lives = memory->blocks[i][j].lives;
+				int16_t shade = (int16_t)(110 + lives*50);
+				if (shade > 310) shade = 310;
+				GPU_Color color = GPU_ShadeColor(rowColor[j], shade);
+				int16_t bx = (int16_t)(EDGE_X + (BLOCK_V_EDGE_X+(BLOCK_V_W+BLOCK_V_SEPARATOR_W)*i)/200.0f*BOX_W);
+				int16_t by = (int16_t)(EDGE_Y+(BLOCK_V_EDGE_Y+(BLOCK_V_H+BLOCK_V_SEPARATOR_H)*j)/200.0f*BOX_H);
+				GPU_DrawBevelSquare(color, bx, by, (int16_t)BLOCK_W, (int16_t)BLOCK_H);
+				if (lives == 1 && memory->level > 1)
 				{
-				case 1: color = C_GRAY_DARK;
-					break;
-				case 2: color = C_GRAY_MEDIUM;
-					break;
-				case 3: color = C_GRAY_LIGHT;
-					break;
-				default:
-					color = C_WHITE;
-					break;
+					GPU_Color crack = GPU_ShadeColor(color, 60);
+					GPU_DrawLine(crack, (int16_t)(bx+BLOCK_W*0.3f), by+2, (int16_t)(bx+BLOCK_W*0.45f), (int16_t)(by+BLOCK_H-3));
+					GPU_DrawLine(crack, (int16_t)(bx+BLOCK_W*0.45f), (int16_t)(by+BLOCK_H/2), (int16_t)(bx+BLOCK_W*0.7f), (int16_t)(by+BLOCK_H-2));
 				}
-				GPU_DrawBevelSquare(color, (int16_t)(EDGE_X + (BLOCK_V_EDGE_X+(BLOCK_V_W+BLOCK_V_SEPARATOR_W)*i)/200.0f*BOX_W), (int16_t)(EDGE_Y+(BLOCK_V_EDGE_Y+(BLOCK_V_H+BLOCK_V_SEPARATOR_H)*j)/200.0f*BOX_H), (int16_t)BLOCK_W, (int16_t)BLOCK_H);
 			}
 		}
 	// Draw Balls
@@ -510,6 +522,13 @@ static void G_Draw(void)
 		char text[16];
 		sprintf(text, "LEVEL %u", memory->level);
 		GPU_DrawTextOutlined(C_C3, C_BLACK, f_big, GPU_X/2, (int16_t)(GPU_Y/2-30), text);
+	}
+	if (memory->popupTicks && memory->breakoutState == BS_PLAYING)
+	{
+		static const char * const popupText[5] = { "WIDE!", "SLOW!", "+100", "MULTIBALL!", "+1 LIFE" };
+		static const GPU_Color popupColor[5] = { C_C3, C_CYAN, C_YELLOW, C_MAGENTA, C_RED };
+		GPU_DrawTextOutlined(popupColor[memory->popupType], C_BLACK, fm, GPU_X/2,
+		                     (int16_t)(GPU_Y-EDGE_Y-26), popupText[memory->popupType]);
 	}
 	// Draw Text
 	if (memory->breakoutState != BS_PLAYING)

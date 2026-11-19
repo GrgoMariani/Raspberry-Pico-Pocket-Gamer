@@ -97,6 +97,10 @@ static void FormatNumber(char * out, double v)
 		return;
 	}
 	while (hl + digits > MAX_INPUT && digits > 1) { fp /= 10; digits--; }
+	/* digits is always 1..6 here; the explicit clamp keeps the precision of
+	   the %0*ld directive provably bounded (and silences -Wformat-overflow) */
+	if (digits < 1) digits = 1;
+	if (digits > 6) digits = 6;
 	sprintf(out, "%s%0*ld", head, digits, fp);
 }
 

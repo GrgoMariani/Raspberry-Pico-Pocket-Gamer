@@ -112,10 +112,12 @@ static uint32_t frameHash(void)
 static uint32_t countPixels(GPU_Color color)
 {
     flush();
+    /* GetPixel() returns plain RGB565, the C_* constants are byte swapped */
+    GPU_Color plain = (GPU_Color)((color >> 8) | ((color & 0xff) << 8));
     uint32_t n = 0;
     for (uint16_t x = 0; x < GPU_X; x++)
         for (uint16_t y = 0; y < GPU_Y; y++)
-            if (GetPixel(x, y) == color)
+            if (GetPixel(x, y) == plain)
                 n++;
     return n;
 }
@@ -226,6 +228,16 @@ static void runFramesIdle(const Callbacks * cb, int frames)
     SetupCallbacks(cb);
     for (int i = 0; i < frames; i++)
         stepFrame();
+}
+
+/* hold UP for the whole run (handy for driving/runner game screenshots) */
+static void runFramesHoldUp(const Callbacks * cb, int frames)
+{
+    SetupCallbacks(cb);
+    setKeys(KEY_UP);
+    for (int i = 0; i < frames; i++)
+        stepFrame();
+    setKeys(KEY_NONE);
 }
 
 /* play with a fixed rotation of single key presses, builds up a real board */
@@ -939,6 +951,18 @@ static const GameEntry allGames[] = {
     { "hangman",     &G36_Callbacks },
     { "bomberman",   &G37_Callbacks },
     { "tankfight",   &G38_Callbacks },
+    { "dinorun",     &G39_Callbacks },
+    { "numbertrain", &G40_Callbacks },
+    { "countit",     &G41_Callbacks },
+    { "abcmatch",    &G42_Callbacks },
+    { "shapehunt",   &G43_Callbacks },
+    { "additup",     &G44_Callbacks },
+    { "bigorsmall",  &G45_Callbacks },
+    { "subtractit",  &G46_Callbacks },
+    { "patternplay", &G47_Callbacks },
+    { "whattime",    &G48_Callbacks },
+    { "spotdiff",    &G49_Callbacks },
+    { "wagonorder",  &G50_Callbacks },
 };
 
 static const GameEntry * findGame(const char * name)
@@ -1327,14 +1351,14 @@ static void test_menu(void)
             if (GetPixel(x, y) != 0) lit++;
     CHECK(lit > 2000, "the cube area has only %u lit pixels", lit);
 
-    /* the last entry of the list is Tank Fight: UP from the top wraps to it and
-       RIGHT has to launch it */
+    /* the last entry of the list is Wagon Order: UP from the top wraps to it
+       and RIGHT has to launch it */
     SetupCallbacks(&MM_Callbacks);
     for (int i = 0; i < 5; i++) stepFrame();
     tapKey(KEY_UP);
     tapKey(KEY_RIGHT);
-    CHECK(_callbacks.initCallback == G38_Callbacks.initCallback,
-          "the last menu entry did not launch tank fight");
+    CHECK(_callbacks.initCallback == G50_Callbacks.initCallback,
+          "the last menu entry did not launch wagon order");
     setKeys(KEY_NONE);
     setTouch(0, 0, 0);
 }
@@ -1657,6 +1681,404 @@ static void test_action_games(void)
     SetupCallbacks(&MM_Callbacks);
 }
 
+/* Regression: Texture_DrawFilledCircle used to seed a vertical line and never
+   emit the middle row - the same one-pixel gap GPU_DrawFilledCircle had. */
+static void test_texture_circle_solid(void)
+{
+    BEGIN_TEST("texture filled circle has no centre gap");
+    const int16_t cx = 32, cy = 32;
+    for (int r = 1; r <= 24; r++)
+    {
+        GPU_ClearTexture();
+        Texture_DrawFilledCircle(C_WHITE, cx, cy, (int16_t)r);
+        int bad = 0;
+        for (int dy = -r; dy <= r && !bad; dy++)
+        {
+            int lo = 1000, hi = -1000;
+            for (int dx = -r-1; dx <= r+1; dx++)
+            {
+                int xx = cx+dx, yy = cy+dy;
+                if (xx < 0 || xx >= TEXTURE_SIZE || yy < 0 || yy >= TEXTURE_SIZE)
+                    continue;
+                if (Texture_GetPixel((uint8_t)xx, (uint8_t)yy) != 0)
+                {
+                    if (dx < lo) lo = dx;
+                    if (dx > hi) hi = dx;
+                }
+            }
+            if (hi < lo) { bad = 1; break; }
+            for (int dx = lo; dx <= hi; dx++)
+                if (Texture_GetPixel((uint8_t)(cx+dx), (uint8_t)(cy+dy)) == 0)
+                    { bad = 1; break; }
+            if (dy == 0 && hi != r) bad = 1;
+        }
+        CHECK(!bad, "texture filled circle r=%d has a gap or a short middle row", r);
+    }
+    /* radius 0 must draw exactly one pixel and not run away (the empty circle
+       used to underflow its uint16 y counter here) */
+    GPU_ClearTexture();
+    Texture_DrawFilledCircle(C_WHITE, 10, 10, 0);
+    Texture_DrawEmptyCircle(C_WHITE, 20, 20, 0);
+    uint32_t n = 0;
+    for (uint8_t y = 0; y < TEXTURE_SIZE; y++)
+        for (uint8_t x = 0; x < TEXTURE_SIZE; x++)
+            if (Texture_GetPixel(x, y) != 0) n++;
+    CHECK(n == 2, "radius 0 circles drew %u pixels instead of 2", (unsigned)n);
+    GPU_ClearTexture();
+}
+
+/* Regression: a scale-1 sprite hanging off the left/top edge used to vanish
+   completely because the negative coordinates were cast to uint16. */
+static void test_sprite_clipping(void)
+{
+    BEGIN_TEST("sprite clips instead of wrapping at the screen edge");
+    static const uint16_t rows[4] = { 0xF000, 0xF000, 0xF000, 0xF000 };  /* 4x4 block */
+    GPU_ClearFramebuffers();
+    GPU_DrawSprite(rows, 4, 4, -2, -2, C_WHITE, 1);
+    flush();
+    uint32_t n = 0;
+    for (uint16_t y = 0; y < 4; y++)
+        for (uint16_t x = 0; x < 4; x++)
+            if (GetPixel(x, y) != 0) n++;
+    CHECK(n == 4, "partially visible sprite drew %u pixels instead of 4", (unsigned)n);
+    GPU_ClearFramebuffers();
+}
+
+/* Regression: the Doodle Jump HEIGHT HUD was passed to GPU_DrawTextOutlined
+   with x=6, which centres the text on 6 and pushed most of it off screen. */
+static void test_doodle_hud(void)
+{
+    BEGIN_TEST("doodle jump HUD is fully on screen");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(130000000);
+    Random_Seed(39);
+    SetupCallbacks(&G30_Callbacks);
+    for (int i = 0; i < 10; i++) stepFrame();
+    /* "HEIGHT 0" in the 7px font is 56px wide starting at x=6: pixels must
+       exist beyond x=40 (the clipped version ended at x=34) */
+    flush();
+    uint32_t n = 0;
+    for (uint16_t y = 0; y < 15; y++)
+        for (uint16_t x = 40; x < 90; x++)
+            if (GetPixel(x, y) != 0) n++;
+    CHECK(n > 10, "doodle jump HEIGHT text is clipped off the left edge (%u px)", (unsigned)n);
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Dino Run: start, run, die on an obstacle, restart delay, jump and duck. */
+static void test_dino_run(void)
+{
+    BEGIN_TEST("dino run (start, jump, duck, death, restart delay)");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(140000000);
+    Random_Seed(40);
+    SetupCallbacks(&G39_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "dino run did not initialise");
+
+    /* start with UP */
+    tapKey(KEY_UP);
+    for (int i = 0; i < 10; i++) stepFrame();
+    CHECK(countNonBlack() > 1000, "dino run does not draw");
+
+    /* ducking must change the dino sprite */
+    uint32_t standHash = regionHash(30, 160, 90, 205);
+    setKeys(KEY_DOWN);
+    for (int i = 0; i < 4; i++) stepFrame();
+    uint32_t duckHash = regionHash(30, 160, 90, 205);
+    setKeys(KEY_NONE);
+    CHECK(standHash != duckHash, "ducking did not change the dino");
+
+    /* jumping must lift the dino off the ground */
+    for (int i = 0; i < 4; i++) stepFrame();
+    uint32_t groundHash = regionHash(30, 140, 90, 178);
+    tapKey(KEY_UP);
+    for (int i = 0; i < 3; i++) stepFrame();
+    uint32_t airHash = regionHash(30, 140, 90, 178);
+    CHECK(groundHash != airHash, "jumping did not lift the dino");
+
+    /* without input the dino must eventually hit an obstacle */
+    for (int i = 0; i < 1200 && mainMemory._gameState != GS_DONE; i++)
+        stepFrame();
+    CHECK(mainMemory._gameState == GS_DONE, "dino run never ends without input");
+
+    /* an immediate tap must NOT restart (score reading delay) */
+    setTouch(1, 160, 100); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_DONE, "dino run restarted instantly on tap");
+
+    /* after the delay a tap restarts and the run begins again */
+    for (int i = 0; i < 30; i++) stepFrame();
+    setTouch(1, 160, 100); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "dino run did not restart after the delay");
+    CHECK(_callbacks.initCallback == G39_Callbacks.initCallback, "dino run switched away");
+
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Number Train: a closed-loop drive - full throttle until the green stop-zone
+   bracket reaches the braking point, then full brake. The loco must halt
+   inside the zone, score, and open the boarding panel. One tap loads one
+   friend; when the station's number is reached the train celebrates and the
+   next station appears. Sailing past stations must NEVER end the game - the
+   counting game has no fail state. */
+static void test_number_train(void)
+{
+    BEGIN_TEST("number train (drive, stop, count friends aboard, no fail state)");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(150000000);
+    Random_Seed(41);
+    SetupCallbacks(&G40_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "number train did not initialise");
+    uint32_t scoreZero = regionHash(0, 0, 100, 15);
+
+    tapKey(KEY_RIGHT);                  /* depart */
+    setKeys(KEY_RIGHT);                 /* full throttle */
+    uint8_t braking = 0;
+    for (int i = 0; i < 600 && !braking; i++)
+    {
+        stepFrame();
+        flush();
+        /* leftmost bright green stop-zone bracket on the bracket scanline
+           (GetPixel returns plain RGB565: green = 0x07E0) */
+        for (uint16_t x = 0; x < GPU_X; x++)
+            if (GetPixel(x, 192) == 0x07E0)
+            {
+                /* braking from full speed (240 px/s) takes ~192 px; the front
+                   sits at x=118, so trigger when the zone start reaches 273 */
+                if (x <= 273)
+                    braking = 1;
+                break;
+            }
+    }
+    CHECK(braking, "the station never came into view");
+    setKeys(KEY_LEFT);                  /* full brake */
+    for (int i = 0; i < 120; i++) stepFrame();
+    setKeys(KEY_NONE);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(regionHash(0, 0, 100, 15) != scoreZero, "stopping in the zone did not score");
+    CHECK(mainMemory._gameState == GS_RUNNING, "a good stop ended the game");
+
+    /* the boarding panel (yellow border at y=34, x 70..250) must be up */
+    #define BOARD_PANEL() ({ int n = 0; flush(); \
+        for (uint16_t x = 70; x < 250; x++) \
+            if (GetPixel(x, 34) == 0xFFE0) n++; \
+        n; })
+    CHECK(BOARD_PANEL() > 100, "stopping did not open the boarding panel");
+
+    /* one tap = one friend; level 1 asks for 1..3 friends, so the panel must
+       close after at most 3 taps (extra taps are ignored, never a fail) */
+    int taps = 0;
+    while (BOARD_PANEL() > 100 && taps < 12)
+    {
+        setTouch(1, 160, 120); stepFrame(); setTouch(0, 0, 0);
+        for (int i = 0; i < 3; i++) stepFrame();
+        taps++;
+    }
+    CHECK(taps >= 1 && taps <= 3, "boarding took %d taps (level 1 wants 1..3)", taps);
+    CHECK(mainMemory._gameState == GS_RUNNING, "boarding ended the game");
+
+    /* the celebration runs out and the next station is on its way */
+    for (int i = 0; i < 90; i++) stepFrame();
+    CHECK(BOARD_PANEL() <= 100, "the boarding panel never closed");
+    CHECK(mainMemory._gameState == GS_RUNNING, "the celebration ended the game");
+    #undef BOARD_PANEL
+
+    /* never brake again: stations are sailed past, but the gentle counting
+       game must keep going - no lives, no game over */
+    setKeys(KEY_RIGHT);
+    for (int i = 0; i < 2400; i++) stepFrame();
+    setKeys(KEY_NONE);
+    CHECK(mainMemory._gameState == GS_RUNNING, "missing stations ended the counting game");
+    CHECK(_callbacks.initCallback == G40_Callbacks.initCallback, "number train switched away");
+
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* The kindergarten games: they start on a tap, every card reacts, a correct
+   card earns a star, a wrong card keeps the same question, and there is no
+   fail state. Tapping every card once guarantees one correct answer. */
+static void test_edu_games(void)
+{
+    BEGIN_TEST("educational games (counting, letters, shapes, sums, compare, patterns, clock)");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(160000000);
+    const struct {
+        const Callbacks * cb;
+        const char * name;
+        int cards, cardY, cardX0, cardDX;
+    } g[8] = {
+        { &G41_Callbacks, "count it",    3, 204, 56, 102 },
+        { &G42_Callbacks, "abc match",   4, 182, 42, 77 },
+        { &G43_Callbacks, "shape hunt",  4, 182, 42, 77 },
+        { &G44_Callbacks, "add it up",   3, 204, 56, 102 },
+        { &G45_Callbacks, "big or small",2, 166, 84, 152 },
+        { &G46_Callbacks, "subtract it", 3, 204, 56, 102 },
+        { &G47_Callbacks, "pattern play",3, 187, 56, 102 },
+        { &G48_Callbacks, "what time",   3, 204, 56, 102 },
+    };
+    for (int k = 0; k < 8; k++)
+    {
+        Random_Seed(500 + k);
+        SetupCallbacks(g[k].cb);
+        for (int i = 0; i < 5; i++) stepFrame();
+        CHECK(mainMemory._gameState == GS_RUNNING, "%s did not initialise", g[k].name);
+        CHECK(countNonBlack() > 1000, "%s ready screen does not draw", g[k].name);
+
+        /* a tap starts the questions */
+        setTouch(1, 160, 120); stepFrame(); setTouch(0, 0, 0);
+        for (int i = 0; i < 5; i++) stepFrame();
+        uint32_t starsBefore = regionHash(230, 0, 320, 14);
+
+        /* tap every card once with a pause between: wrong taps must leave the
+           question in place, so one of the taps has to earn a star */
+        for (int c = 0; c < g[k].cards; c++)
+        {
+            setTouch(1, (uint16_t)(g[k].cardX0 + c*g[k].cardDX), (uint16_t)g[k].cardY);
+            stepFrame();
+            setTouch(0, 0, 0);
+            for (int i = 0; i < 25; i++) stepFrame();
+        }
+        CHECK(regionHash(230, 0, 320, 14) != starsBefore, "%s: no star was earned", g[k].name);
+        CHECK(mainMemory._gameState == GS_RUNNING, "%s ended - it must not have a fail state", g[k].name);
+        CHECK(_callbacks.initCallback == g[k].cb->initCallback, "%s switched away", g[k].name);
+
+        /* the keyboard path (LEFT/RIGHT cursor + UP) must react too */
+        for (int i = 0; i < 45; i++) stepFrame();   /* let any feedback expire */
+        uint32_t before = frameHash();
+        tapKey(KEY_RIGHT);
+        for (int i = 0; i < 3; i++) stepFrame();
+        CHECK(frameHash() != before, "%s did not react to the keyboard", g[k].name);
+        tapKey(KEY_UP);
+        for (int i = 0; i < 3; i++) stepFrame();
+        CHECK(mainMemory._gameState == GS_RUNNING, "%s: UP answer ended the game", g[k].name);
+    }
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Spot the Diff: tapping every cell of the left picture must find all the
+   differences (wrong taps only flash), earn stars and bring the next picture.
+   The keyboard cursor + UP must work too, and nothing may end the game. */
+static void test_spot_diff(void)
+{
+    BEGIN_TEST("spot the diff (find all, wrong taps, hint, next picture)");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(170000000);
+    Random_Seed(61);
+    SetupCallbacks(&G49_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "spot the diff did not initialise");
+    CHECK(countNonBlack() > 1000, "spot the diff ready screen does not draw");
+    setTouch(1, 160, 120); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 5; i++) stepFrame();
+    uint32_t starsBefore = regionHash(230, 0, 320, 14);
+
+    /* tap all nine cells of the left picture: every difference is among them */
+    for (int row = 0; row < 3; row++)
+        for (int col = 0; col < 3; col++)
+        {
+            setTouch(1, (uint16_t)(31 + col*50), (uint16_t)(55 + row*50));
+            stepFrame();
+            setTouch(0, 0, 0);
+            for (int i = 0; i < 6; i++) stepFrame();
+        }
+    CHECK(regionHash(230, 0, 320, 14) != starsBefore, "spot the diff: no star was earned");
+    CHECK(mainMemory._gameState == GS_RUNNING, "spot the diff ended - it must not fail");
+    /* the celebration runs out and a fresh picture appears */
+    for (int i = 0; i < 80; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "spot the diff ended after a win");
+    CHECK(_callbacks.initCallback == G49_Callbacks.initCallback, "spot the diff switched away");
+
+    /* keyboard: the cursor moves and UP checks a cell */
+    uint32_t before = frameHash();
+    tapKey(KEY_RIGHT);
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(frameHash() != before, "spot the diff did not react to the keyboard");
+    tapKey(KEY_UP);
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "spot the diff: UP ended the game");
+
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
+/* Wagon Order: depart, the speed readout reacts to the throttle, a tap away
+   from any wagon answers gently, and a long drive past every wagon must not
+   end the game (no fail state). The coupling logic itself is covered by the
+   closed-loop host logic tests. */
+static void test_wagon_order(void)
+{
+    BEGIN_TEST("wagon order (drive, station puzzle, no fail state)");
+    Host_SetTimeAutoAdvance(0);
+    Host_SetVirtualTime(180000000);
+    Random_Seed(62);
+    SetupCallbacks(&G50_Callbacks);
+    for (int i = 0; i < 5; i++) stepFrame();
+    CHECK(mainMemory._gameState == GS_RUNNING, "wagon order did not initialise");
+    CHECK(countNonBlack() > 1000, "wagon order ready screen does not draw");
+
+    tapKey(KEY_RIGHT);                  /* depart */
+    uint32_t speedZero = regionHash(250, 0, 320, 12);
+    setKeys(KEY_RIGHT);
+    for (int i = 0; i < 120; i++) stepFrame();
+    CHECK(regionHash(250, 0, 320, 12) != speedZero, "wagon order: throttle did not change the speed");
+
+    /* the whistle answers a tap while driving */
+    uint32_t popupBefore = regionHash(60, 48, 260, 72);
+    setTouch(1, 160, 120); stepFrame(); setTouch(0, 0, 0);
+    for (int i = 0; i < 3; i++) stepFrame();
+    CHECK(regionHash(60, 48, 260, 72) != popupBefore, "wagon order: tap gave no answer");
+
+    /* creep up to a station and stop in its green zone: the puzzle panel opens.
+       The panel border is a yellow row at y=26 spanning most of the screen. */
+    #define PUZZLE_OPEN() ({ int n = 0; flush(); \
+        for (uint16_t x = 12; x < 308; x++) if (GetPixel(x, 26) == 0xFFE0) n++; \
+        n > 150; })
+    int opened = 0;
+    for (int i = 0; i < 60 && !opened; i++)
+    {
+        /* drive a stretch, then let go: the station stop assist glides the
+           train to a halt at any station within range and opens its puzzle */
+        setKeys(KEY_RIGHT);
+        for (int j = 0; j < 30; j++) stepFrame();
+        setKeys(KEY_NONE);
+        for (int j = 0; j < 100; j++) stepFrame();
+        opened = PUZZLE_OPEN();
+    }
+    CHECK(opened, "wagon order: stopping at a station did not open a puzzle");
+
+    /* tap the answer cards: wrong ones flash, the game must keep running */
+    for (int c = 0; c < 3; c++)
+    {
+        setTouch(1, (uint16_t)(56 + c*102), 178); stepFrame(); setTouch(0, 0, 0);
+        for (int i = 0; i < 30; i++) stepFrame();
+    }
+    CHECK(mainMemory._gameState == GS_RUNNING, "wagon order puzzle ended the game");
+    CHECK(_callbacks.initCallback == G50_Callbacks.initCallback, "wagon order switched away");
+    #undef PUZZLE_OPEN
+
+    /* driving on must never end the game (no fail state) */
+    setKeys(KEY_RIGHT);
+    for (int i = 0; i < 1500; i++) stepFrame();
+    setKeys(KEY_NONE);
+    CHECK(mainMemory._gameState == GS_RUNNING, "wagon order ended - it must not fail");
+
+    setKeys(KEY_NONE);
+    setTouch(0, 0, 0);
+    SetupCallbacks(&MM_Callbacks);
+}
+
 /* ------------------------------------------------------------------- main */
 
 int main(int argc, char ** argv)
@@ -1680,6 +2102,7 @@ int main(int argc, char ** argv)
         const char * mode = (argc >= 6) ? argv[5] : "random";
         int idle = (strcmp(mode, "idle") == 0);
         int cycle = (strcmp(mode, "cycle") == 0);
+        int hold = (strcmp(mode, "hold") == 0);
         _rngState = 4242;
         Host_SetVirtualTime(10000000);
         Random_Seed(0xBEEF);
@@ -1687,6 +2110,8 @@ int main(int argc, char ** argv)
             runFramesIdle(game->cb, frames);
         else if (cycle)
             runFramesCycle(game->cb, frames);
+        else if (hold)
+            runFramesHoldUp(game->cb, frames);
         else
             runFramesRandom(game->cb, frames);
         savePpm(argv[3]);
@@ -1700,6 +2125,8 @@ int main(int argc, char ** argv)
     test_line_clipping();
     test_circle_radius_zero();
     test_circle_fill_solid();
+    test_texture_circle_solid();
+    test_sprite_clipping();
     test_touch_mapping();
     test_touch_filtering();
     test_keyboard_debounce();
@@ -1717,6 +2144,12 @@ int main(int argc, char ** argv)
     test_added_games();
     test_sokoban_undo();
     test_action_games();
+    test_doodle_hud();
+    test_dino_run();
+    test_number_train();
+    test_edu_games();
+    test_spot_diff();
+    test_wagon_order();
     test_memory_mismatch_timing();
     test_tunnel_ship_position();
     test_solitaire();

@@ -27,6 +27,8 @@ typedef struct {
 	float trail_x[6];
 	float trail_y[6];
 	uint8_t trailIdx;
+	uint8_t flashP, flashC;   /* ticks of paddle hit flash */
+	uint16_t rally;           /* returns in the current rally */
 	unsigned int score_player;
 	unsigned int score_computer;
 	PongState pongState;
@@ -56,6 +58,7 @@ static void ServeBall()
 		memory->trail_y[i] = 0.0f;
 	}
 	memory->trailIdx = 0;
+	memory->rally = 0;
 	int32_t angleDeg = (int32_t)Random_Range(81) - 40;      /* -40 .. +40 */
 	float rad = (float)angleDeg * 3.14159265f/180.0f;
 	memory->ball_sin = sinf(rad);
@@ -71,6 +74,8 @@ static void G_Init(void)
 	memory->score_computer = 0;
 	memory->player_y = 0.0f;
 	memory->computer_y = 0.0f;
+	memory->flashP = 0;
+	memory->flashC = 0;
 	memory->pongState = PS_NOT_INITIALIZED;
 	mainMemory._lastRenderedTick = CalculateTick();
 	Keyboard_GetPressedKeys();
@@ -107,6 +112,8 @@ static void CheckPlayerCollision()
 		/* put the ball back in front of the paddle so it cannot be hit
 		   twice while it slowly leaves the contact zone */
 		memory->ball_x = -(100.0f-BALL_SIZE/2);
+		memory->flashP = 4;
+		memory->rally++;
 		SpeedUpRally();
 	}
 	else
@@ -130,6 +137,8 @@ static void CheckAICollision()
 		memory->ball_sin = diff;
 		memory->ball_cos = -sqrt(1-diff*diff);
 		memory->ball_x = (100.0f-BALL_SIZE/2);
+		memory->flashC = 4;
+		memory->rally++;
 		SpeedUpRally();
 	}
 	else
@@ -228,6 +237,8 @@ static void G_Update(void)
 	{
 		if (memory->pongState == PS_PLAYING)
 		{
+			if (memory->flashP) memory->flashP--;
+			if (memory->flashC) memory->flashC--;
 			if (mainMemory.touchPressed)
 				TouchPaddle();
 			if (keyboard_held & KEY_UP)
@@ -269,12 +280,20 @@ static void G_Draw(void)
 	GPU_DrawPanel(RGB(10,14,40), C_BLUE, EDGE_X, EDGE_Y, BOX_W, BOX_H);
 	for (int16_t y = EDGE_Y+6; y < GPU_Y-EDGE_Y; y += 12)
 		GPU_DrawFilledSquare(C_RED, (int16_t)(EDGE_X + BOX_W/2 - 1), y, 2, 6);
-	// Draw Player
-	GPU_DrawBevelSquare(C_WHITE, (int16_t)(EDGE_X-PLAYER_W/2),
-	                    (int16_t)(EDGE_Y+(memory->player_y+100)/200*BOX_H-PLAYER_H/2), PLAYER_W, PLAYER_H);
+	// Draw Player (flashes yellow for a moment when it returns the ball)
+	{
+		int16_t py = (int16_t)(EDGE_Y+(memory->player_y+100)/200*BOX_H-PLAYER_H/2);
+		if (memory->flashP)
+			GPU_DrawGlow(C_YELLOW, EDGE_X, (int16_t)(py+PLAYER_H/2), 14);
+		GPU_DrawBevelSquare(memory->flashP ? C_YELLOW : C_WHITE, (int16_t)(EDGE_X-PLAYER_W/2), py, PLAYER_W, PLAYER_H);
+	}
 	// Draw Computer
-	GPU_DrawBevelSquare(C_WHITE, (int16_t)(GPU_X-EDGE_X-PLAYER_W/2),
-	                    (int16_t)(EDGE_Y+(memory->computer_y+100)/200*BOX_H-PLAYER_H/2), PLAYER_W, PLAYER_H);
+	{
+		int16_t cy = (int16_t)(EDGE_Y+(memory->computer_y+100)/200*BOX_H-PLAYER_H/2);
+		if (memory->flashC)
+			GPU_DrawGlow(C_YELLOW, (int16_t)(GPU_X-EDGE_X), (int16_t)(cy+PLAYER_H/2), 14);
+		GPU_DrawBevelSquare(memory->flashC ? C_YELLOW : C_WHITE, (int16_t)(GPU_X-EDGE_X-PLAYER_W/2), cy, PLAYER_W, PLAYER_H);
+	}
 	// Draw Ball
 	{
 		/* motion trail */
@@ -297,6 +316,14 @@ static void G_Draw(void)
 	GPU_DrawText(C_C1, fm, 4, 2, text, (uint16_t)len);
 	len = sprintf(text, "AI %u", memory->score_computer);
 	GPU_DrawText(C_C2, fm, (int16_t)(GPU_X-len*fm->width-4), 2, text, (uint16_t)len);
+	if (memory->pongState == PS_PLAYING && memory->rally >= 3)
+	{
+		/* the rally heats up: show the streak and how fast the ball is now */
+		len = sprintf(text, "RALLY %u  SPEED %u%%", memory->rally,
+		              (unsigned)(memory->ballSpeedMul*100.0f));
+		GPU_DrawTextCentered(memory->rally >= 8 ? C_ORANGE : C_GRAY_MEDIUM, &fontDescription[0],
+		                     GPU_X/2, (int16_t)(GPU_Y-8), text);
+	}
 
 	if (memory->pongState == PS_NOT_INITIALIZED)
 	{

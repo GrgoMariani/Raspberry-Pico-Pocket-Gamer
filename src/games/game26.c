@@ -14,11 +14,11 @@
 #define FB_GRAVITY 0.34f
 #define FB_FLAP -5.4f
 #define FB_PIPE_W 46
-#define FB_PIPE_SPEED 2.3f
-#define FB_PIPE_SPACING 150
+#define FB_PIPE_SPEED 2.6f
+#define FB_PIPE_SPACING 142
 #define FB_NUM_PIPES 4
 #define FB_GROUND 212
-#define FB_GAP 74
+#define FB_GAP 66
 
 typedef struct {
     float x;
@@ -125,7 +125,9 @@ static void G_Update(void)
             memory->birdY += memory->birdVY;
             if (memory->birdY < 6) { memory->birdY = 6; memory->birdVY = 0; }
             if (memory->birdY > FB_GROUND-8) { memory->birdY = FB_GROUND-8; Die(); }
-            for (uint8_t i = 0; i < FB_NUM_PIPES; i++)
+            /* once dead, stop processing pipes: a pipe passed later in this
+               same tick must not add to the score of the finished run */
+            for (uint8_t i = 0; i < FB_NUM_PIPES && memory->state == 1; i++)
             {
                 Pipe * p = &memory->pipes[i];
                 p->x -= FB_PIPE_SPEED;
@@ -146,7 +148,10 @@ static void G_Update(void)
                 {
                     float gap = FB_GAP;
                     if (memory->birdY - 7 < p->gapY - gap/2 || memory->birdY + 7 > p->gapY + gap/2)
+                    {
                         Die();
+                        break;
+                    }
                 }
             }
         }

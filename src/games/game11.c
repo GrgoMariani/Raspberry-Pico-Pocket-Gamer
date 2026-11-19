@@ -59,7 +59,13 @@ static void _GenerateRandomFruit()
 	r >>= 5;
 	s->y = 1+(r%(SNAKE_H-2));
 	r >>= 5;
-	if (!field[s->x][s->y])
+	/* never on the snake, the other fruit or the golden fruit: two fruits on
+	   one cell used to overlap visually and both were eaten in a single step */
+	const SnakeObject * other = (s == &fruit1) ? &fruit2 : &fruit1;
+	uint8_t occupied = (uint8_t)(field[s->x][s->y] != 0 ||
+		(other->dissapearTime && s->x == other->x && s->y == other->y) ||
+		(fruitGold.dissapearTime && s->x == fruitGold.x && s->y == fruitGold.y));
+	if (!occupied)
 	{
 		/* 1.3s .. 10.4s; without the +1 every eighth fruit vanished instantly */
 		s->dissapearTime = t + (uint32_t)(1.3*ONE_SECOND) * (1 + (r&0x07));
@@ -78,7 +84,9 @@ static void _SpawnGoldFruit()
 	{
 		uint8_t x = (uint8_t)(1 + Random_Range(SNAKE_W-2));
 		uint8_t y = (uint8_t)(1 + Random_Range(SNAKE_H-2));
-		if (!field[x][y] && !(x==head.x && y==head.y))
+		if (!field[x][y] && !(x==head.x && y==head.y) &&
+			!(fruit1.dissapearTime && x==fruit1.x && y==fruit1.y) &&
+			!(fruit2.dissapearTime && x==fruit2.x && y==fruit2.y))
 		{
 			fruitGold.x = x;
 			fruitGold.y = y;

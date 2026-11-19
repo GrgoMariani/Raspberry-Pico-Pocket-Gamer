@@ -49,16 +49,28 @@ static const GPU_Color _pieceColor[7] = {
 
 static Game5Memory * const memory = (Game5Memory*)(&mainMemory.sharedMemory.memblocks[0]);
 
+/* 7-bag randomizer: the seven pieces are shuffled into a bag and dealt one
+   by one, so every shape appears exactly once per seven pieces. Pure random
+   draws used to produce long droughts of the I piece (and floods of S/Z). */
+static uint8_t _bag[7];
+static uint8_t _bagPos = 7;
+
 static Tetramino GetRandomTetramino()
 {
-    uint8_t r = IF_Random() % 7;
-    if (r == 0) return TTRMN_I;
-    if (r == 1) return TTRMN_O;
-    if (r == 2) return TTRMN_L;
-    if (r == 3) return TTRMN_J;
-    if (r == 4) return TTRMN_S;
-    if (r == 5) return TTRMN_Z;
-    return TTRMN_T;
+    if (_bagPos >= 7)
+    {
+        for (uint8_t i = 0; i < 7; i++)
+            _bag[i] = i;
+        for (uint8_t i = 6; i > 0; i--)
+        {
+            uint8_t j = (uint8_t)Random_Range(i + 1);
+            uint8_t t = _bag[i];
+            _bag[i] = _bag[j];
+            _bag[j] = t;
+        }
+        _bagPos = 0;
+    }
+    return (Tetramino)_bag[_bagPos++];
 }
 
 #define NUM_TICKS 15
@@ -283,9 +295,12 @@ static uint32_t _GravityInterval(void)
     return interval;
 }
 
-static void _DropTetramino()
+/* soft drop: one point per cell, like the modern games */
+static void _SoftDrop()
 {
-    if (!_MoveTetraminoDown())
+    if (_MoveTetraminoDown())
+        memory->_score += 1;
+    else
     {
         _NaturalFixActiveTetramino();
         _CheckField();
@@ -368,6 +383,7 @@ static void G_Init(void)
     memory->_lines = 0;
     memory->_clearFlash = 0;
     memory->_lastClear = 0;
+    _bagPos = 7;   /* a fresh bag for every game */
     mainMemory._lastRenderedTick = CalculateCurrentTick();
     memory->_activeX = 0;
     memory->_activeY = 0;
@@ -393,11 +409,13 @@ static void G_Update(void)
         uint16_t tx, ty;
         if (Touch_TakeTap(&tx, &ty) && tx < GPU_X/2)
             _HardDrop();
-        if (memory->_clearFlash)
-            memory->_clearFlash--;
         uint32_t tick = CalculateCurrentTick();
         while (mainMemory._lastRenderedTick < tick)
         {
+            /* the flash decays on game ticks, not main loop iterations (the
+               loop spins far faster, so it used to vanish within milliseconds) */
+            if (memory->_clearFlash)
+                memory->_clearFlash--;
             KeyPressedEnum keyboard = Keyboard_GetPressedKeys();
             if (keyboard != KEY_NONE)
             {
@@ -419,7 +437,7 @@ static void G_Update(void)
             {
             	if (keyboard_held & KEY_DOWN)
 				{
-					_DropTetramino();
+					_SoftDrop();
 				}
             	keyboard_held = KEY_NONE;
             }

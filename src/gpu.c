@@ -551,7 +551,15 @@ void GPU_DrawSprite(const uint16_t * rows, uint8_t width, uint8_t height,
             if (bits & (1u << (15 - c)))
             {
                 if (scale == 1)
-                    GPU_DrawPixel(color, (uint16_t)(x+c), (uint16_t)(y+r));
+                {
+                    /* signed check: a sprite hanging off the left/top edge must
+                       still draw its visible part (a uint16 cast would wrap
+                       negative coordinates to huge values and skip them) */
+                    int16_t px = (int16_t)(x + c);
+                    int16_t py = (int16_t)(y + r);
+                    if (px >= 0 && py >= 0)
+                        GPU_DrawPixel(color, (uint16_t)px, (uint16_t)py);
+                }
                 else
                     GPU_DrawFilledSquare(color, (int16_t)(x+c*scale), (int16_t)(y+r*scale), scale, scale);
             }
@@ -848,6 +856,13 @@ void Texture_DrawEmptyCircle(GPU_Color color, int16_t x, int16_t y, int16_t radi
 {
     if (radius < 0)
         return;
+    if (radius == 0)
+    {
+        /* without this guard yd-- underflows the uint16 and the loop below
+           runs ~32000 iterations spraying wrapped pixels over the texture */
+        Texture_DrawPixel(color, x, y);
+        return;
+    }
     uint16_t xd = 0, yd = (uint16_t)radius;
     int16_t d = 3 - 2 * radius;
     Texture_DrawPixel(color, x+xd, y+yd);
@@ -883,9 +898,17 @@ void Texture_DrawFilledCircle(GPU_Color color, int16_t x, int16_t y, int16_t rad
 {
     if (radius < 0)
         return;
+    if (radius == 0)
+    {
+        Texture_DrawPixel(color, x, y);
+        return;
+    }
     uint16_t xd = 0, yd = (uint16_t)radius;
     int16_t d = 3 - 2 * radius;
-    Texture_DrawLine(color, x, y-yd, x, y+yd);
+    /* seed the MIDDLE ROW, not a vertical line: the loop below never emits
+       row y+0, so a vertical seed left a one pixel horizontal gap through the
+       centre of every disc (the same bug GPU_DrawFilledCircle used to have) */
+    Texture_DrawLine(color, x-yd, y, x+yd, y);
     while (yd >= xd)
     {
         xd++;

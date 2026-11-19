@@ -11,7 +11,7 @@ A Raspberry Pico __RP2040__ and __ILI9341__ based pocket console.
 
 ## Description
 
-Since the Pico came out I wanted to create a project for it that I can show my son to, so I decided to make him a Pocket Console. The game repertoire consists of thirty-eight different games, five of which are rendered with the built in software 3d engine.
+Since the Pico came out I wanted to create a project for it that I can show my son to, so I decided to make him a Pocket Console. The game repertoire consists of fifty different games, six of which are rendered with the built in software 3d engine. Eleven of them are educational games for ages 4-7 (Number Train, Count It!, ABC Match, Shape Hunt, Add It Up, Big or Small, Subtract It, Pattern Play, What Time?, Spot the Diff and Wagon Order) and work well in a kindergarten or classroom setting.
 
 ## Game list
 |               |               |                |
@@ -28,7 +28,11 @@ Since the Pico came out I wanted to create a project for it that I can show my s
 | Sokoban       | Whack-a-mole  | Doodle Jump    |
 | Solitaire     | Pinball       | 15 Puzzle      |
 | Flood-It      | Reversi       | Hangman        |
-| Bomberman     | Tank Fight    |                |
+| Bomberman     | Tank Fight    | Dino Run       |
+| Number Train  | Count It!     | ABC Match      |
+| Shape Hunt    | Add It Up     | Big or Small   |
+| Subtract It   | Pattern Play  | What Time?     |
+| Spot the Diff | Wagon Order (3d) |             |
 
 ## Graphics & gameplay
 
@@ -208,6 +212,225 @@ to share a subtle bug during testing: they read only the *held* keys while
 playing, so the key-*press* latch piled up and, on game over, a stale press
 instantly restarted the game. The latch is now drained every tick.
 
+## Educational games for ages 4-7
+
+Eleven games target preschool and early-school kids and are built for an educational environment:
+big touch targets, bright pictures instead of reading, gentle difficulty ramps,
+count-along feedback, stars for every success - and **no timer, no lives and no
+game over**. A wrong answer just flashes the card and says TRY AGAIN, the same
+question stays, so kids can explore without frustration. All of them work with
+the touchscreen (tap a card) and with the switches (LEFT/RIGHT to move the
+yellow cursor, UP to pick).
+
+* **Count It!** - count the apples, balloons or stars (1..3 at first, then up
+  to 10) and tap the matching big number card.
+* **ABC Match** - a big capital letter is shown; first find the same capital,
+  later find its small letter ("A" -> "a"), the classic pre-school letter game.
+* **Shape Hunt** - a white silhouette (circle, square, triangle, star, heart,
+  diamond) or a colour swatch is shown with its name; tap the matching card.
+  The pictures make it playable before kids can read.
+* **Add It Up** - two groups of apples with a big plus sign: count them
+  together and tap the total. Sums start within 5 and grow to 10, the pictures
+  let kids count their way to the answer.
+* **Number Train** - the locomotive game, rebuilt as a counting game (below).
+
+The first five are aimed at 5-year-olds; the others stretch the same ideas
+to ages 5-7 (Spot the Diff already works for 4-year-olds):
+
+* **Big or Small** - two number cards with counting dots: tap the bigger (or
+  smaller) number, as the question says. Within 10 at first, then up to 20.
+* **Subtract It** - a group of apples with some crossed out: tap how many are
+  left over. Everything stays within 10, the pictures carry the meaning.
+* **Pattern Play** - a row of coloured shapes repeats A B A B, A A B B, A B B
+  or A B C; tap the piece that comes next. Two-element patterns first, three
+  later.
+* **What Time?** - an analog clock shows an o'clock time (half past joins in
+  later); tap the matching digital time. Short hand = hour, long hand =
+  minutes.
+* **Spot the Diff** (ages 4-7) - two pictures look almost the same, but a
+  colour, a shape, a size or a whole object differs. Tap a difference in
+  either picture to circle it in both; one difference at first, then two and
+  three. After three wrong taps a gentle hint pulses around one of the
+  remaining differences.
+* **Wagon Order** - the second train game, a fully 3d puzzle train: stop at
+  each station and solve one of eight rotating puzzles (counting, addition,
+  subtraction, patterns, odd-one-out, missing numbers, bigger/smaller, letters)
+  to load a cargo wagon and deliver (below).
+
+Every correct answer earns a star with a burst and a rotating GREAT!/WELL
+DONE!/SUPER!/YES!, and the best "in a row" streak is kept. The difficulty
+follows the number of answered questions, so a session naturally grows with
+the child. The host test suite taps every card of every quiz game to prove
+that a star is earned, that wrong taps keep the question, and that no input
+can ever end the game.
+
+The two endless runners were also made **slightly harder** in the same pass:
+Flappy Bird's gap shrank from 74 to 66 px, the pipes move at 2.6 instead of
+2.3 px/tick and sit 142 px apart instead of 150. Dino Run starts at 5.0 instead
+of 4.6 px/tick, ramps 0.55 per hundred points (cap 9.6), the obstacle gaps are
+a little tighter and the pterodactyls appear from score 100 at a 50% share
+instead of 150/40%. The minimum gap still leaves room to land and jump again
+at top speed.
+
+## Wagon Order (the fully 3d puzzle train)
+
+The console's second train game is a **fully 3d** educational game for ages
+5-7 built around **solving a puzzle at every station**. The whole world is
+rendered with the software 3d engine - the ground plane, both tracks with
+their sleepers and rails, the trees, telegraph poles, mountains, the stations,
+the coal lumps, the coal tender and the detailed steam locomotive - under an
+orthographic quarter view, with only the sky as a painted backdrop. The loco
+has rotating spoked wheels, a moving coupling rod and a crosshead rod that
+follows the wheel pin. The far siding is scenery and **scrolls slower than the
+main line** for a proper parallax depth cue.
+
+The loop: **drive RIGHT to a station and stop in its green zone**. Friends
+wait on the platform (little 3d people who wave as you arrive); solving the
+station's puzzle loads a cargo wagon of goods (apples, crates or milk cans,
+drawn in 3d on the wagon) and the friends board. Fill the train (3-4 wagons)
+to deliver, hear a happy whistle toot, and roll on to the next station. The
+puzzles are the challenge; driving is the fun in between. Stopping is made
+easy for small hands: the green zone is wide, and a **stop assist** glides the
+train to a halt right at the station whenever you let go of the throttle
+nearby. Eight puzzle types rotate so one session covers a whole early-years
+curriculum, and the difficulty ramps with the number solved:
+
+* **COUNT THEM** - count the apples / balloons / stars and tap the number.
+* **ADD THEM** - picture addition (two groups of apples, tap the total).
+* **TAKE AWAY** - picture subtraction (some apples crossed out, tap the rest).
+* **WHAT'S NEXT?** - complete a shape-and-colour pattern (AB, AABB, ABB, ABC).
+* **ODD ONE OUT** - tap the one shape that differs from the other three.
+* **MISSING NUMBER** - fill the gap in a number sequence (1,3,5,?,9).
+* **BIG OR SMALL** - tap the bigger (or smaller) of two numbers.
+* **LETTERS** - match a capital, find its small letter, or pick the letter a
+  word starts with (_IG -> P).
+
+Every puzzle is touch-first (tap a big answer card) and also works with the
+switches (LEFT/RIGHT to move the yellow cursor, UP to choose). There is **no
+timer and no fail state**: a wrong answer just flashes and says TRY AGAIN and
+the same puzzle stays, so it stays encouraging in a classroom. A correct
+answer earns a star with a burst and a rotating GREAT! / WELL DONE! / SUPER! /
+YES!.
+
+RIGHT powers the loco, LEFT brakes and then **reverses**, DOWN toots the
+whistle. A guidance line and a pulsing off-screen arrow show how far the
+station is. **A missed station is never lost**: it stays put and the child can
+reverse back to it and still solve its puzzle (a gentle "OOPS! REVERSE BACK"
+nudge, no penalty, no skipped station). **Steam & coal** add a driving layer:
+the throttle spends steam, coasting builds it back up, a low boiler only slows
+the loco (it never stalls), and glowing 3d coal lumps on the track refill the
+tender while the coal pile visibly shrinks and grows and a needle gauge shows
+the pressure.
+
+The locomotive is the most detailed model of the fleet: riveted boiler with
+bands on a cylinder body, smokebox door, chimney with cap, brass steam dome,
+sandbox and whistle, running board and handrail, cab with a lit window at
+night, flickering firebox glow, cowcatcher, buffer beam, headlight with a
+night glow and piston cylinder. The world scrolls through day, sunset and
+night palettes, and chimney smoke chuffs faster under throttle and drifts with
+the train's wind - also when reversing.
+
+The host logic tests validate every puzzle type (the answer really is the
+count / sum / remainder / pattern continuation / odd one / gap / bigger /
+letter, choices are distinct, the odd-one-out has exactly one minority, the
+word is a real word from the list), then drive closed-loop to a station, open
+the puzzle, refuse a wrong answer without penalty, solve it to load a wagon,
+fill the train to deliver, miss a station and reverse back to it (it stays
+put and still opens), let the stop assist glide to a halt inside the zone,
+drain and refill steam, toot the whistle, and run a long drive-stop-solve soak
+that keeps delivering and never ends the game. The integration suite also creeps up to a
+station, confirms the puzzle panel opens, and taps the answer cards.
+
+## Number Train (the counting locomotive)
+
+The former Train Stop precision-driving game became a counting game for young
+kids. The driving stays: hold **RIGHT** to open the throttle, **LEFT** to brake
+(touch: right half powers, left half brakes - the keys match the touch halves), and halt the loco with its front
+coupler inside the green stop zone at each station - the zone is generous now
+(88 px wide, never below 60). The closer to the flag you stop, the more points:
+**PERFECT** (±10 px) 300, **GREAT** (±24 px) 150, **GOOD** 75, plus a level
+bonus.
+
+The educational part starts at the platform: the station sign shows a big
+**number** and exactly that many friends wait on the platform, waving. A panel
+opens - TAP TO LOAD THE FRIENDS! - and every tap (or key press) loads one
+friend onto the open wagon behind the loco while a big counter counts along
+("1 / 2", "2 / 2"...). When the number is reached: WELL DONE!, a steam burst,
+bonus points, and the next station is on its way. Extra taps are simply
+ignored, so the wagon can never be overfilled. The counting goal grows gently
+with the level: 1..3 friends, then 1..5, then up to 10. Sailing past a platform
+without stopping costs nothing - a gentle OOPS! NEXT STOP and the journey
+continues. There are no lives and no game over.
+
+The locomotive itself kept all its drawing love: spoked drive wheels that
+rotate with the distance, a moving coupling rod between them, a maroon boiler
+with bands, steam dome, cab with a lit window at night, cowcatcher, headlight
+(with a glow after dark), brake sparks at the wheels and chimney smoke that
+chuffs faster under throttle and drifts with the wind of your own speed. The
+world scrolls through three palettes - day, sunset and night (stars, crescent
+moon) - with parallax mountains, hills, trees, clouds, sleepers and a station
+building with the big number sign, platform safety line and flag marker. The
+HUD shows score, best, stops served, a km/h readout, the level, the distance
+to the next marker and a progress bar.
+
+The host test drives it closed-loop: full throttle until the green zone
+bracket reaches the braking point, then full brake - the loco must halt inside
+the zone, score and open the boarding panel; one tap per friend must close it
+within the station's number; and afterwards never braking again must NOT end
+the game.
+
+Two test-tooling fixes came with this pass: the shared `countPixels()` helper
+compared byte-swapped `C_*` constants against the plain RGB565 that
+`GetPixel()` returns, so colour counts were silently always zero (the snake
+length check was vacuous) - it now converts, and `make shot` gained a
+`MODE=hold` that holds UP for the whole run, handy for driving-game
+screenshots.
+
+## Dino Run & the latest polish pass
+
+**Dino Run** joined the menu as the console's first endless runner: jump the
+cacti, duck the pterodactyls (they fly at three heights - low ones must be
+jumped, middle ones ducked or jumped, high ones run under), and hold DOWN in
+the air to drop back down fast. The world scrolls with two layers of parallax
+dunes, clouds and pebbles, the speed rises every hundred points, and every 400
+points the desert switches between day and night (stars and a crescent moon
+included). UP or a tap jumps, DOWN or holding the bottom strip of the
+touchscreen ducks. Score, best score and a ~0.7 s score-reading delay before a
+restart, like the other runners.
+
+More defects found and fixed in the same pass:
+
+* **Tetramino** - the line-clear flash decayed once per main loop iteration
+  instead of per game tick, so it vanished within milliseconds; it now stays
+  for about half a second. The piece dealer also became a proper **7-bag
+  randomizer** (every shape exactly once per seven pieces - no more I-piece
+  droughts), and soft drop scores a point per cell like the modern games.
+* **Doodle Jump** - the HEIGHT counter was passed to the centred-text helper
+  with x=6, which pushed most of the text off the left edge of the screen; it
+  is now drawn left aligned with a drop shadow (regression-tested).
+* **GPU** - `Texture_DrawFilledCircle()` still had the one-pixel horizontal
+  centre gap that was fixed in the framebuffer circle long ago, and
+  `Texture_DrawEmptyCircle()` with radius 0 underflowed its unsigned counter
+  and sprayed ~32000 wrapped pixels over the texture; both are fixed and
+  regression-tested for radii 0..24. `GPU_DrawSprite()` also clipped wrongly:
+  a sprite hanging off the left/top edge vanished completely because its
+  negative coordinates were cast to unsigned - the visible part now draws.
+* **Snake** - fruits could spawn on the same cell as another fruit (they
+  overlapped visually and both were eaten in one step for a silent +4); all
+  three fruits now avoid each other.
+* **Flappy Bird** - pipes kept moving and scoring for the rest of the tick the
+  bird died in, so a pipe passed after the fatal collision still counted.
+* **Breakout** - the bricks were four shades of grey; they are now classic
+  rainbow rows that dim as they take damage, with cracks on the last hit
+  point, and catching a power-up shows what you got (WIDE!, SLOW!, +100,
+  MULTIBALL!, +1 LIFE).
+* **Simon** - playback speeds up as the sequence grows, like the arcade.
+* **Pong** - the paddle flashes on a return, and a rally/speed readout appears
+  under the field once the rally heats up.
+* **Tooling** - `extras/tests/ppm2png.py` no longer requires Pillow (a pure
+  stdlib PNG writer is the fallback), and the calculator's `%0*ld` precision
+  is explicitly bounded so `-Wformat-overflow` stays quiet.
+
 ## The 3d engine (`src/gpu3d.c`)
 
 A small fixed point (16.16) software renderer, written for the RP2040 which has
@@ -225,7 +448,10 @@ The main menu shows a rotating cube with the raspberry sprite mapped onto its
 faces, Q*bert builds its pyramid out of shaded cubes, Mission Control renders a
 3d terrain and the landing module, Asteroids tumbles real 3d rock bodies as
 wireframes, Frogger looks at the road and the river through a perspective
-camera and Turbo Drive renders the whole road out of 3d quads.
+camera, Turbo Drive renders the whole road out of 3d quads, and Wagon Order
+builds its entire yard - ground, tracks, sleepers, trees, poles, mountains,
+stations, cargo wagons, coal, tender and a steam locomotive with rotating
+spoked wheels and coupling rods - out of shaded boxes, cylinders and balls.
 
 ## Controls
 
@@ -283,7 +509,8 @@ make shot NAME=qbert FRAMES=120     # render frames of a game to build/qbert.png
 ```
 
 `make shot` accepts every name from the menu plus `menu`, and an optional
-`MODE=idle` to run without simulated input. The runner covers the pixel
+`MODE=idle` to run without simulated input or `MODE=hold` to hold UP for the
+whole run. The runner covers the pixel
 format, the font rasterizer, line clipping, the touch calibration and filter,
 the switch debouncing, the random generator, the 3d math (including the winding
 of every built in mesh), the painter's algorithm, the menu button behaviour and

@@ -87,6 +87,18 @@ add_executable(PocketGamer
         src/games/game36.c
         src/games/game37.c
         src/games/game38.c
+        src/games/game39.c
+        src/games/game40.c
+        src/games/game41.c
+        src/games/game42.c
+        src/games/game43.c
+        src/games/game44.c
+        src/games/game45.c
+        src/games/game46.c
+        src/games/game47.c
+        src/games/game48.c
+        src/games/game49.c
+        src/games/game50.c
         )
 
 # Warnings for the project sources (SDK sources keep their own flags)
